@@ -10,8 +10,10 @@ xenta-replayer/
 # Playwright test artifacts
 .playwright-mcp/
 
-# Screenshots (dev artifacts)
-*.png
+# Screenshots (dev artifacts in root)
+/*.png
+# Allow docs/img assets
+!docs/img/
 
 # Python
 __pycache__/
