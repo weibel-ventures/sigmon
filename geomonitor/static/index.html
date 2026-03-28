@@ -616,6 +616,7 @@ const state = {
   sortAsc: true,         // sort direction
   plugins: {},           // plugin metadata from server
   tracks: {},            // track store from server
+  treeExpanded: false,   // global expand/collapse state for decoded tree
 };
 
 // -----------------------------------------------------------------------
@@ -710,9 +711,15 @@ function matchesFilter(msg) {
   const catVal = filterCat.value;
   if (catVal) {
     const cats = messageCategories(msg);
-    // catVal may be a number string ("48") or plugin ID ("adsb")
     const numVal = parseInt(catVal);
-    const match = isNaN(numVal) ? cats.includes(catVal) : cats.includes(numVal);
+    let match;
+    if (isNaN(numVal)) {
+      // String filter: match plugin ID or category string
+      match = cats.includes(catVal) || msg.plugin_id === catVal;
+    } else {
+      // Numeric filter (e.g. ASTERIX cat 48): match numeric category
+      match = cats.includes(numVal);
+    }
     if (!match) return false;
   }
 
@@ -961,6 +968,30 @@ function renderDecodedTree(msg) {
       }
     });
   });
+
+  // Apply global expand/collapse state
+  applyTreeExpandState();
+}
+
+function applyTreeExpandState() {
+  if (state.treeExpanded) {
+    decodedTree.querySelectorAll(".tree-children").forEach(el => el.classList.add("open"));
+    decodedTree.querySelectorAll(".tree-arrow").forEach(el => el.textContent = "\u25BC");
+  } else {
+    // Collapse all except the top-level node (first .tree-children stays open)
+    const allChildren = decodedTree.querySelectorAll(".tree-children");
+    const allArrows = decodedTree.querySelectorAll(".tree-arrow");
+    allChildren.forEach((el, i) => {
+      if (i === 0) {
+        el.classList.add("open");
+      } else {
+        el.classList.remove("open");
+      }
+    });
+    allArrows.forEach((el, i) => {
+      el.textContent = (i === 0) ? "\u25BC" : "\u25B6";
+    });
+  }
 }
 
 function renderBlock(block) {
@@ -1274,25 +1305,15 @@ function handleKeyDown(e) {
       break;
     }
     case "ArrowRight": {
-      // Expand all tree nodes in the decoded tree
       e.preventDefault();
-      decodedTree.querySelectorAll(".tree-children").forEach(el => {
-        el.classList.add("open");
-      });
-      decodedTree.querySelectorAll(".tree-arrow").forEach(el => {
-        el.textContent = "\u25BC";
-      });
+      state.treeExpanded = true;
+      applyTreeExpandState();
       break;
     }
     case "ArrowLeft": {
-      // Collapse all tree nodes in the decoded tree
       e.preventDefault();
-      decodedTree.querySelectorAll(".tree-children").forEach(el => {
-        el.classList.remove("open");
-      });
-      decodedTree.querySelectorAll(".tree-arrow").forEach(el => {
-        el.textContent = "\u25B6";
-      });
+      state.treeExpanded = false;
+      applyTreeExpandState();
       break;
     }
     case " ": {
