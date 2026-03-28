@@ -1,0 +1,79 @@
+{
+    "id": "adsb",
+    "name": "ADS-B",
+    "version": "1.0.0",
+    "description": "ADS-B / Mode S aircraft surveillance via SBS BaseStation or Beast TCP feed",
+    "author": "Weibel Ventures",
+    "icon": "plane",
+    "color": "#0077FD",
+    "api_version": 1,
+
+    "ingestor": {
+        "type": "tcp_connect",
+        "default_port": 30003
+    },
+
+    "list_columns": [
+        {
+            "key": "icao",
+            "label": "ICAO",
+            "width": 65,
+            "sortable": true
+        },
+        {
+            "key": "callsign",
+            "label": "Callsign",
+            "width": 80,
+            "sortable": true
+        },
+        {
+            "key": "altitude",
+            "label": "Alt",
+            "width": 55,
+            "sortable": true
+        },
+        {
+            "key": "summary",
+            "label": "Summary",
+            "width": null,
+            "sortable": true
+        }
+    ],
+
+    "settings_schema": {
+        "type": "object",
+        "properties": {
+            "host": {
+                "type": "string",
+                "title": "Host",
+                "default": "127.0.0.1",
+                "description": "Hostname or IP of the ADS-B data source (dump1090, readsb, etc.)"
+            },
+            "port": {
+                "type": "integer",
+                "title": "Port",
+                "default": 30003,
+                "minimum": 1,
+                "maximum": 65535
+            },
+            "format": {
+                "type": "string",
+                "title": "Format",
+                "default": "sbs",
+                "enum": ["sbs", "avr"],
+                "description": "Data format: sbs (BaseStation CSV on port 30003) or avr (raw hex on port 30002)"
+            },
+            "reconnect_delay": {
+                "type": "number",
+                "title": "Reconnect delay (s)",
+                "default": 5.0,
+                "minimum": 1,
+                "maximum": 60
+            }
+        }
+    },
+
+    "entity_types": ["track"],
+    "map_layer": true,
+    "supports_hex_dump": false
+}

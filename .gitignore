@@ -15,6 +15,9 @@ xenta-replayer/
 # Allow docs/img assets
 !docs/img/
 
+# Runtime config (environment-specific)
+settings.json
+
 # Python
 __pycache__/
 *.pyc

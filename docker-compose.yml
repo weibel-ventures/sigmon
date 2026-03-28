@@ -4,7 +4,8 @@ services:
     ports:
       - "${WEB_PORT:-8080}:${WEB_PORT:-8080}"
       - "${ASTERIX_UDP_PORT:-23401}:${ASTERIX_UDP_PORT:-23401}/udp"
+    volumes:
+      - ./settings.json:/opt/geomonitor/settings.json
     environment:
-      - ASTERIX_UDP_PORT=${ASTERIX_UDP_PORT:-23401}
       - WEB_PORT=${WEB_PORT:-8080}
       - BUFFER_MAX_MESSAGES=${BUFFER_MAX_MESSAGES:-50000}

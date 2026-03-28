@@ -526,8 +526,8 @@ html, body {
     <div id="stats">
       <span>Rate: <span class="val" id="stat-rate">0</span>/s</span>
       <span>Buffer: <span class="val" id="stat-buffer">0</span></span>
+      <span>Tracks: <span class="val" id="stat-tracks">0</span></span>
       <span>Clients: <span class="val" id="stat-clients">0</span></span>
-      <span>UDP: <span class="val" id="stat-port">-</span></span>
     </div>
   </div>
 
@@ -601,7 +601,7 @@ html, body {
 // State
 // -----------------------------------------------------------------------
 const state = {
-  messages: [],          // all received AsterixEntry dicts
+  messages: [],          // all received Message dicts
   filtered: [],          // indices into messages matching current filters
   selectedSeq: null,     // seq of selected message
   paused: false,
@@ -610,9 +610,12 @@ const state = {
   reconnectTimer: null,
   seenCats: new Set(),
   seenIPs: new Set(),
+  seenPlugins: new Set(),
   statsInterval: null,
   sortCol: "seq",        // current sort column
   sortAsc: true,         // sort direction
+  plugins: {},           // plugin metadata from server
+  tracks: {},            // track store from server
 };
 
 // -----------------------------------------------------------------------
@@ -663,33 +666,40 @@ function writeHash() {
 // Message summary
 // -----------------------------------------------------------------------
 function messageSummary(msg) {
+  // New model: summary comes from server
+  if (msg.summary && msg.summary !== "") return msg.summary;
+  if (msg.decode_error) return "DECODE ERROR: " + msg.decode_error;
+  // Legacy fallback
   if (msg.parse_error) return "PARSE ERROR: " + msg.parse_error;
-  if (!msg.parsed || msg.parsed.length === 0) return "(empty)";
-
-  const parts = [];
-  for (const block of msg.parsed) {
-    const cat = block.category || "?";
-    let info = "Cat " + cat;
-
-    // Cat 48 — try target ID or track number
-    if (block.I240 && block.I240.TId) info += " " + block.I240.TId.val.trim();
-    else if (block.I161 && block.I161.Tn) info += " Trk#" + block.I161.Tn.val;
-    else if (block.I220 && block.I220.ACAddr) info += " " + block.I220.ACAddr.val;
-
-    // Cat 34 — message type
-    if (block.I000 && block.I000.MsgTyp) {
-      const mt = block.I000.MsgTyp;
-      info += " " + (mt.meaning || "Type " + mt.val);
+  if (msg.parsed) {
+    const parts = [];
+    for (const block of (Array.isArray(msg.parsed) ? msg.parsed : [msg.parsed])) {
+      const cat = block.category || "?";
+      let info = "Cat " + cat;
+      if (block.I240 && block.I240.TId) info += " " + block.I240.TId.val.trim();
+      else if (block.I161 && block.I161.Tn) info += " Trk#" + block.I161.Tn.val;
+      if (block.I000 && block.I000.MsgTyp) info += " " + (block.I000.MsgTyp.meaning || "");
+      parts.push(info);
     }
-
-    parts.push(info);
+    return parts.join(" | ");
   }
-  return parts.join(" | ");
+  return "(empty)";
+}
+
+function messagePlugin(msg) {
+  return msg.plugin_id || "unknown";
 }
 
 function messageCategories(msg) {
-  if (!msg.parsed) return [];
-  return msg.parsed.map(b => b.category).filter(c => c != null);
+  // New model: use meta.category or plugin_id
+  if (msg.meta && msg.meta.category != null) {
+    const cat = msg.meta.category;
+    return Array.isArray(cat) ? cat : [cat];
+  }
+  if (msg.plugin_id) return [msg.plugin_id];
+  // Legacy
+  if (msg.parsed) return (Array.isArray(msg.parsed) ? msg.parsed : []).map(b => b.category).filter(c => c != null);
+  return [];
 }
 
 // -----------------------------------------------------------------------
@@ -700,7 +710,10 @@ function matchesFilter(msg) {
   const catVal = filterCat.value;
   if (catVal) {
     const cats = messageCategories(msg);
-    if (!cats.includes(parseInt(catVal))) return false;
+    // catVal may be a number string ("48") or plugin ID ("adsb")
+    const numVal = parseInt(catVal);
+    const match = isNaN(numVal) ? cats.includes(catVal) : cats.includes(numVal);
+    if (!match) return false;
   }
 
   // IP filter
@@ -813,11 +826,13 @@ function formatTime(ts) {
 
 function createMsgRow(msg) {
   const row = document.createElement("div");
-  row.className = "msg-row" + (msg.parse_error ? " parse-error" : "");
+  const hasError = msg.decode_error || msg.parse_error;
+  row.className = "msg-row" + (hasError ? " parse-error" : "");
   row.dataset.seq = msg.seq;
 
   const cats = messageCategories(msg);
-  const catStr = cats.length > 0 ? cats.join(",") : "?";
+  const plugin = messagePlugin(msg);
+  const catStr = cats.length > 0 ? cats.join(",") : plugin;
   const summary = messageSummary(msg);
 
   row.innerHTML =
@@ -909,19 +924,29 @@ function renderDecodedTree(msg) {
     return;
   }
 
-  if (msg.parse_error) {
-    decodedTree.innerHTML = '<div class="tree-error">Parse error: ' + escapeHtml(msg.parse_error) + '</div>';
+  const error = msg.decode_error || msg.parse_error;
+  if (error) {
+    decodedTree.innerHTML = '<div class="tree-error">Decode error: ' + escapeHtml(error) + '</div>';
     return;
   }
 
-  if (!msg.parsed || msg.parsed.length === 0) {
+  // Support both new (decoded) and legacy (parsed) field names
+  const data = msg.decoded || msg.parsed;
+  if (!data || (Array.isArray(data) && data.length === 0)) {
     decodedTree.innerHTML = '<div class="tree-empty">No decoded data</div>';
     return;
   }
 
   let html = "";
-  for (const block of msg.parsed) {
-    html += renderBlock(block);
+  const blocks = Array.isArray(data) ? data : [data];
+  for (const block of blocks) {
+    // ASTERIX blocks have "category" → use renderBlock
+    // Other plugins produce generic dicts → render as generic tree
+    if (block.category != null) {
+      html += renderBlock(block);
+    } else {
+      html += renderGenericTree(block, msg.plugin_id || "");
+    }
   }
   decodedTree.innerHTML = html;
 
@@ -1073,6 +1098,62 @@ function renderLeaf(key, parentName, field) {
   if (field.max !== undefined) html += ' <span class="tree-desc">[max: ' + field.max + ']</span>';
 
   html += '</div>';
+  return html;
+}
+
+// -----------------------------------------------------------------------
+// Rendering — generic tree (for non-ASTERIX plugins)
+// -----------------------------------------------------------------------
+function renderGenericTree(data, pluginId) {
+  let html = '<div class="tree-node">';
+  html += '<div class="tree-toggle">';
+  html += '<span class="tree-arrow">\u25BC</span>';
+  html += '<span class="tree-category-label">' + escapeHtml(pluginId.toUpperCase()) + '</span>';
+  html += '</div>';
+  html += '<div class="tree-children open">';
+
+  for (const key of Object.keys(data)) {
+    const val = data[key];
+    if (val === null || val === undefined) continue;
+
+    if (typeof val === "object" && !Array.isArray(val)) {
+      // Check if it's a leaf with val/desc/meaning
+      if ("val" in val && Object.keys(val).length <= 4) {
+        html += renderLeaf(key, "", val);
+      } else {
+        // Sub-section
+        html += '<div class="tree-node">';
+        html += '<div class="tree-toggle">';
+        html += '<span class="tree-arrow">\u25B6</span>';
+        html += '<span class="tree-key">' + escapeHtml(key) + '</span>';
+        html += '</div>';
+        html += '<div class="tree-children">';
+        for (const sk of Object.keys(val)) {
+          const sv = val[sk];
+          if (sv === null || sv === undefined) continue;
+          if (typeof sv === "object" && !Array.isArray(sv) && "val" in sv) {
+            html += renderLeaf(sk, "", sv);
+          } else if (typeof sv === "object" && !Array.isArray(sv)) {
+            // Deeper nesting
+            html += renderDataItem(sk, sv);
+          } else {
+            html += '<div class="tree-leaf">';
+            html += '<span class="tree-key">' + escapeHtml(sk) + '</span>';
+            html += ' <span class="tree-val">' + escapeHtml(String(sv)) + '</span>';
+            html += '</div>';
+          }
+        }
+        html += '</div></div>';
+      }
+    } else {
+      html += '<div class="tree-leaf">';
+      html += '<span class="tree-key">' + escapeHtml(key) + '</span>';
+      html += ' <span class="tree-val">' + escapeHtml(String(val)) + '</span>';
+      html += '</div>';
+    }
+  }
+
+  html += '</div></div>';
   return html;
 }
 
@@ -1236,6 +1317,11 @@ function updateFilterDropdowns(msg) {
   let catsChanged = false;
   let ipsChanged = false;
 
+  // Add plugin_id as a "category" for filtering
+  if (msg.plugin_id && !state.seenCats.has(msg.plugin_id)) {
+    state.seenCats.add(msg.plugin_id);
+    catsChanged = true;
+  }
   for (const cat of messageCategories(msg)) {
     if (!state.seenCats.has(cat)) {
       state.seenCats.add(cat);
@@ -1336,8 +1422,8 @@ async function pollStats() {
     const data = await resp.json();
     $("#stat-rate").textContent = data.messages_per_sec;
     $("#stat-buffer").textContent = data.buffer_size;
+    $("#stat-tracks").textContent = data.tracks || 0;
     $("#stat-clients").textContent = data.connected_clients;
-    $("#stat-port").textContent = data.udp_port;
   } catch (e) { /* ignore */ }
 }
 
@@ -1363,6 +1449,8 @@ function connectWS() {
 
     if (data.type === "snapshot") {
       state.messages = data.messages;
+      if (data.plugins) state.plugins = data.plugins;
+      if (data.tracks) state.tracks = data.tracks;
       // Populate filter dropdowns from all messages
       for (const msg of state.messages) {
         updateFilterDropdowns(msg);
@@ -1376,8 +1464,14 @@ function connectWS() {
         updateFilterDropdowns(msg);
         appendToList(msg);
       }
-      // Debounce map updates for live data (rebuild at most every 2s)
-      scheduleMapUpdate();
+    } else if (data.type === "tracks") {
+      // Merge track updates from server
+      if (data.updates) {
+        for (const key in data.updates) {
+          state.tracks[key] = data.updates[key];
+        }
+        scheduleMapUpdate();
+      }
     }
   };
 
@@ -1492,166 +1586,87 @@ function polarToLatLon(sensorLat, sensorLon, rhoNM, thetaDeg) {
   return [sensorLat + dLat, sensorLon + dLon];
 }
 
-// Extract sensor positions from Cat 34 messages
-function extractSensorPosition(block) {
-  if (block.category !== 34) return null;
-  if (!block.I120 || !block.I120.LAT || !block.I120.Lon) return null;
-  const sac = block.I010 ? block.I010.SAC.val : 0;
-  const sic = block.I010 ? block.I010.SIC.val : 0;
-  return {
-    key: sac + ":" + sic,
-    lat: block.I120.LAT.val,
-    lon: block.I120.Lon.val,
-    height: block.I120.Height ? block.I120.Height.val : 0,
-    sac: sac,
-    sic: sic,
-  };
-}
-
-// Extract track position from Cat 48 messages
-function extractTrackPosition(block) {
-  if (block.category !== 48) return null;
-  if (!block.I040 || block.I040.RHO === undefined) return null;
-  const sac = block.I010 ? block.I010.SAC.val : 0;
-  const sic = block.I010 ? block.I010.SIC.val : 0;
-  const sensorKey = sac + ":" + sic;
-  const sensor = mapSensorPositions[sensorKey];
-  if (!sensor) return null; // can't place without sensor position
-
-  const rho = block.I040.RHO.val;
-  const theta = block.I040.THETA.val;
-  const latlng = polarToLatLon(sensor.lat, sensor.lon, rho, theta);
-  const tn = block.I161 ? block.I161.Tn.val : null;
-  const hdg = block.I200 ? block.I200.CHdg.val : null;
-  const spd = block.I200 ? block.I200.CGS.val : null;
-  const alt = block.I110 && block.I110["3D_Height"] ? block.I110["3D_Height"].val : null;
-
-  return {
-    lat: latlng[0],
-    lon: latlng[1],
-    trackNum: tn,
-    heading: hdg,
-    speed: spd,
-    altitude: alt,
-    sensorKey: sensorKey,
-  };
-}
-
+// Rebuild map from server-side track store
 function rebuildMap() {
   if (!leafletMap || !mapContainer.classList.contains("visible")) return;
 
-  // Clear existing track layers
-  for (const tn in mapTrackLayers) {
-    mapTrackLayers[tn].polyline.remove();
-    mapTrackLayers[tn].marker.remove();
+  // Clear existing layers
+  for (const key in mapTrackLayers) {
+    mapTrackLayers[key].polyline.remove();
+    mapTrackLayers[key].marker.remove();
   }
   mapTrackLayers = {};
-
-  // Clear sensor markers
   for (const key in mapSensorMarkers) {
     mapSensorMarkers[key].remove();
   }
   mapSensorMarkers = {};
-  mapSensorPositions = {};
 
-  // First pass: collect sensor positions from all messages (not just filtered)
-  for (const msg of state.messages) {
-    if (!msg.parsed) continue;
-    for (const block of msg.parsed) {
-      const sp = extractSensorPosition(block);
-      if (sp) {
-        mapSensorPositions[sp.key] = sp;
-      }
-    }
-  }
-
-  // Add sensor markers
-  for (const key in mapSensorPositions) {
-    const sp = mapSensorPositions[key];
-    const marker = L.circleMarker([sp.lat, sp.lon], {
-      radius: 8,
-      color: "#ffffff",
-      fillColor: "#FF2F00",
-      fillOpacity: 0.9,
-      weight: 2,
-    }).addTo(leafletMap);
-    marker.bindTooltip("Sensor SAC:" + sp.sac + " SIC:" + sp.sic +
-      "<br>Lat: " + sp.lat.toFixed(5) +
-      "<br>Lon: " + sp.lon.toFixed(5) +
-      "<br>Alt: " + sp.height + "m",
-      { permanent: false });
-    mapSensorMarkers[key] = marker;
-  }
-
-  // Second pass: collect track positions from filtered messages
-  const trackPositions = {}; // trackNum → [{ lat, lon, seq, ... }]
-
-  for (const idx of state.filtered) {
-    const msg = state.messages[idx];
-    if (!msg.parsed) continue;
-    for (const block of msg.parsed) {
-      const tp = extractTrackPosition(block);
-      if (tp && tp.trackNum !== null) {
-        if (!trackPositions[tp.trackNum]) {
-          trackPositions[tp.trackNum] = [];
-        }
-        trackPositions[tp.trackNum].push({
-          lat: tp.lat,
-          lon: tp.lon,
-          seq: msg.seq,
-          heading: tp.heading,
-          speed: tp.speed,
-          altitude: tp.altitude,
-        });
-      }
-    }
-  }
-
-  // Draw tracks
   const bounds = [];
-  for (const tn in trackPositions) {
-    const points = trackPositions[tn];
-    if (points.length === 0) continue;
+  let colorIdx = 0;
 
-    const color = trackColor(parseInt(tn));
-    const latlngs = points.map(p => [p.lat, p.lon]);
+  for (const key in state.tracks) {
+    const track = state.tracks[key];
+    const entity = track.entity;
+    if (!entity || entity.lat == null || entity.lon == null) continue;
 
-    // Polyline for track trail
-    const polyline = L.polyline(latlngs, {
-      color: color,
-      weight: 2,
-      opacity: 0.6,
-    }).addTo(leafletMap);
+    const pluginColor = (state.plugins[entity.source_plugin] || {}).color || "#888";
 
-    // Latest position marker
-    const last = points[points.length - 1];
-    const marker = L.circleMarker([last.lat, last.lon], {
-      radius: 5,
-      color: color,
-      fillColor: color,
-      fillOpacity: 1,
-      weight: 1,
-    }).addTo(leafletMap);
+    if (entity.entity_type === "sensor") {
+      // Sensor marker
+      const marker = L.circleMarker([entity.lat, entity.lon], {
+        radius: 8,
+        color: "#ffffff",
+        fillColor: pluginColor,
+        fillOpacity: 0.9,
+        weight: 2,
+      }).addTo(leafletMap);
+      let tip = entity.label;
+      if (entity.alt_m != null) tip += "<br>Alt: " + entity.alt_m.toFixed(0) + "m";
+      for (const pk in (entity.properties || {})) {
+        tip += "<br>" + pk + ": " + entity.properties[pk];
+      }
+      marker.bindTooltip(tip, { permanent: false });
+      mapSensorMarkers[key] = marker;
+      bounds.push([entity.lat, entity.lon]);
 
-    let tip = "Track #" + tn;
-    if (last.altitude !== null) tip += "<br>Alt: " + last.altitude + " ft";
-    if (last.speed !== null) tip += "<br>Spd: " + last.speed.toFixed(0) + " kn";
-    if (last.heading !== null) tip += "<br>Hdg: " + last.heading.toFixed(0) + "\u00B0";
-    marker.bindTooltip(tip, { permanent: false });
+    } else if (entity.entity_type === "track" || entity.entity_type === "detection") {
+      // Track trail from history
+      const color = trackColor(colorIdx++);
+      const history = track.history || [];
+      const latlngs = history
+        .filter(h => h.lat != null && h.lon != null)
+        .map(h => [h.lat, h.lon]);
+      // Add current position
+      latlngs.push([entity.lat, entity.lon]);
 
-    // Click marker → select that message in the list
-    marker.on("click", () => selectMessage(last.seq));
+      const polyline = L.polyline(latlngs, {
+        color: color,
+        weight: 2,
+        opacity: 0.6,
+      }).addTo(leafletMap);
 
-    mapTrackLayers[tn] = { polyline, marker };
-    bounds.push(...latlngs);
+      const marker = L.circleMarker([entity.lat, entity.lon], {
+        radius: 5,
+        color: color,
+        fillColor: color,
+        fillOpacity: 1,
+        weight: 1,
+      }).addTo(leafletMap);
+
+      let tip = entity.label;
+      if (entity.alt_m != null) tip += "<br>Alt: " + (entity.alt_m * 3.28084).toFixed(0) + " ft";
+      if (entity.speed_mps != null) tip += "<br>Spd: " + (entity.speed_mps / 0.514444).toFixed(0) + " kn";
+      if (entity.heading_deg != null) tip += "<br>Hdg: " + entity.heading_deg.toFixed(0) + "\u00B0";
+      for (const pk in (entity.properties || {})) {
+        if (entity.properties[pk]) tip += "<br>" + pk + ": " + entity.properties[pk];
+      }
+      marker.bindTooltip(tip, { permanent: false });
+
+      mapTrackLayers[key] = { polyline, marker };
+      bounds.push(...latlngs);
+    }
   }
 
-  // Add sensor positions to bounds
-  for (const key in mapSensorPositions) {
-    bounds.push([mapSensorPositions[key].lat, mapSensorPositions[key].lon]);
-  }
-
-  // Fit map to data
   if (bounds.length > 0) {
     leafletMap.fitBounds(bounds, { padding: [30, 30], maxZoom: 14 });
   }
