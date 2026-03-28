@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ASTERIX Monitor</title>
+<title>Signal Monitor</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
 <style>
@@ -300,6 +300,8 @@ html, body {
   padding: 2px 12px;
   cursor: pointer;
   border-bottom: 1px solid transparent;
+  height: 22px;
+  overflow: hidden;
 }
 
 .msg-row:hover { background: var(--bg-hover); }
@@ -436,6 +438,8 @@ html, body {
   border-bottom: 2px solid var(--border);
   flex-shrink: 0;
   position: relative;
+  z-index: 1;
+  isolation: isolate;
 }
 
 #map-container.visible { display: block; }
@@ -689,7 +693,7 @@ html, body {
   <!-- Header -->
   <div id="header">
     <svg id="wv-logo" width="32" height="18" viewBox="0 0 313 177" xmlns="http://www.w3.org/2000/svg"><g stroke="none" fill="none" fill-rule="evenodd"><polygon fill="currentColor" points="171 0 213 0 242 103 271 0 313 0 263 177 221 177"/><path d="M0,0 L50,177 C78,177 92,177 92,177 L121,74 L150,177 L192,177 L142,0 L100,0 L71.0033337,103 L42,0 L0,0 Z" fill="currentColor"/></g></svg>
-    <h1>ASTERIX Monitor</h1>
+    <h1>Signal Monitor</h1>
     <div class="header-btn active" id="play-toggle" title="Pause/resume incoming messages (Space)">
       <span class="dot"></span>
       <span class="icon" id="play-icon">&#9654;</span>
@@ -703,6 +707,10 @@ html, body {
       <span class="icon" id="map-icon">&#9678;</span>
       <span>Map</span>
     </div>
+    <div class="header-btn" id="clear-all-btn" title="Clear all messages and tracks">
+      <span class="icon">&#10005;</span>
+      <span>Clear</span>
+    </div>
     <div class="header-btn" id="settings-toggle" title="Settings (S)">
       <span class="icon">&#9881;</span>
       <span>Settings</span>
@@ -712,7 +720,7 @@ html, body {
     </div>
     <div id="stats">
       <span>Rate: <span class="val" id="stat-rate">0</span>/s</span>
-      <span>Buffer: <span class="val" id="stat-buffer">0</span></span>
+      <span>Msgs: <span class="val" id="stat-buffer">0</span></span>
       <span>Tracks: <span class="val" id="stat-tracks">0</span></span>
       <span>Clients: <span class="val" id="stat-clients">0</span></span>
     </div>
@@ -799,9 +807,100 @@ html, body {
 // -----------------------------------------------------------------------
 // State
 // -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
+// Client-side ring buffer + RAF render queue
+// -----------------------------------------------------------------------
+const MAX_MESSAGES_DEFAULT = 5000;
+const MAX_MESSAGES_KEY = "geomonitor_max_messages";
+let _cachedMaxMessages = null;
+
+function getMaxMessages() {
+  if (_cachedMaxMessages == null) {
+    const v = parseInt(localStorage.getItem(MAX_MESSAGES_KEY));
+    _cachedMaxMessages = (v && v > 0) ? v : MAX_MESSAGES_DEFAULT;
+  }
+  return _cachedMaxMessages;
+}
+
+function setMaxMessages(n) {
+  _cachedMaxMessages = Math.max(100, Math.min(100000, n));
+  localStorage.setItem(MAX_MESSAGES_KEY, _cachedMaxMessages);
+  // Resize the ring buffer
+  ring.resize(_cachedMaxMessages);
+  state.renderDirty = true;
+  return _cachedMaxMessages;
+}
+
+// -----------------------------------------------------------------------
+// O(1) circular buffer — no Array.splice, no index shifting
+// -----------------------------------------------------------------------
+class RingBuffer {
+  constructor(capacity) {
+    this._buf = new Array(capacity);
+    this._cap = capacity;
+    this._head = 0;  // index of oldest element
+    this._size = 0;
+  }
+
+  get length() { return this._size; }
+  get capacity() { return this._cap; }
+
+  push(item) {
+    const idx = (this._head + this._size) % this._cap;
+    this._buf[idx] = item;
+    if (this._size < this._cap) {
+      this._size++;
+    } else {
+      // Overwrite oldest — advance head
+      this._head = (this._head + 1) % this._cap;
+    }
+  }
+
+  // Get element at logical index (0 = oldest)
+  get(i) {
+    if (i < 0 || i >= this._size) return undefined;
+    return this._buf[(this._head + i) % this._cap];
+  }
+
+  // Iterate all elements oldest-first
+  forEach(fn) {
+    for (let i = 0; i < this._size; i++) {
+      fn(this._buf[(this._head + i) % this._cap], i);
+    }
+  }
+
+  clear() {
+    this._head = 0;
+    this._size = 0;
+  }
+
+  resize(newCap) {
+    const items = [];
+    this.forEach(item => items.push(item));
+    this._cap = newCap;
+    this._buf = new Array(newCap);
+    this._head = 0;
+    // Keep only the newest items if shrinking
+    const start = Math.max(0, items.length - newCap);
+    this._size = 0;
+    for (let i = start; i < items.length; i++) {
+      this.push(items[i]);
+    }
+  }
+}
+
+const ring = new RingBuffer(getMaxMessages());
+
+// Incoming message queue — WS pushes here, RAF drains
+const msgQueue = [];
+let rafId = null;
+
+// Cached filter values — invalidated on filter change
+let _filterCache = null;
+
 const state = {
-  messages: [],          // all received Message dicts
-  filtered: [],          // indices into messages matching current filters
+  messages: ring,        // alias for convenience (RingBuffer)
+  filtered: [],          // logical indices into ring matching current filters
   selectedSeq: null,     // seq of selected message
   paused: false,
   autoScroll: true,
@@ -816,6 +915,7 @@ const state = {
   plugins: {},           // plugin metadata from server
   tracks: {},            // track store from server
   treeExpanded: false,   // global expand/collapse state for decoded tree
+  renderDirty: false,    // true when full rebuild needed (eviction, filter change)
 };
 
 // -----------------------------------------------------------------------
@@ -905,55 +1005,57 @@ function messageCategories(msg) {
 // -----------------------------------------------------------------------
 // Filtering
 // -----------------------------------------------------------------------
-function matchesFilter(msg) {
-  // Category filter
+function _getFilterCache() {
+  if (_filterCache) return _filterCache;
   const catVal = filterCat.value;
-  if (catVal) {
+  const searchRaw = filterSearch.value;
+  const fromRaw = filterFrom.value;
+  const toRaw = filterTo.value;
+  _filterCache = {
+    catVal,
+    catNum: catVal ? parseInt(catVal) : NaN,
+    ipVal: filterIP.value,
+    fromTs: fromRaw ? new Date(fromRaw).getTime() / 1000 : 0,
+    toTs: toRaw ? new Date(toRaw).getTime() / 1000 : 0,
+    q: searchRaw ? searchRaw.toLowerCase() : "",
+  };
+  return _filterCache;
+}
+
+function matchesFilter(msg) {
+  const f = _getFilterCache();
+
+  // Category filter
+  if (f.catVal) {
     const cats = messageCategories(msg);
-    const numVal = parseInt(catVal);
-    let match;
-    if (isNaN(numVal)) {
-      // String filter: match plugin ID or category string
-      match = cats.includes(catVal) || msg.plugin_id === catVal;
-    } else {
-      // Numeric filter (e.g. ASTERIX cat 48): match numeric category
-      match = cats.includes(numVal);
-    }
+    const match = isNaN(f.catNum)
+      ? (cats.includes(f.catVal) || msg.plugin_id === f.catVal)
+      : cats.includes(f.catNum);
     if (!match) return false;
   }
 
   // IP filter
-  const ipVal = filterIP.value;
-  if (ipVal && msg.src_ip !== ipVal) return false;
+  if (f.ipVal && msg.src_ip !== f.ipVal) return false;
 
   // Time range
-  const fromVal = filterFrom.value;
-  if (fromVal) {
-    const fromTs = new Date(fromVal).getTime() / 1000;
-    if (msg.ts < fromTs) return false;
-  }
-  const toVal = filterTo.value;
-  if (toVal) {
-    const toTs = new Date(toVal).getTime() / 1000;
-    if (msg.ts > toTs) return false;
-  }
+  if (f.fromTs && msg.ts < f.fromTs) return false;
+  if (f.toTs && msg.ts > f.toTs) return false;
 
-  // Text search (searches summary and raw hex)
-  const q = filterSearch.value.toLowerCase();
-  if (q) {
+  // Text search
+  if (f.q) {
     const summary = messageSummary(msg).toLowerCase();
-    const hex = msg.raw_hex.toLowerCase();
-    const ip = msg.src_ip;
-    if (!summary.includes(q) && !hex.includes(q) && !ip.includes(q)) return false;
+    const hex = (msg.raw_hex || "").toLowerCase();
+    if (!summary.includes(f.q) && !hex.includes(f.q) && !msg.src_ip.includes(f.q)) return false;
   }
 
   return true;
 }
 
 function rebuildFiltered() {
+  _filterCache = null; // invalidate cached filter values
   state.filtered = [];
-  for (let i = 0; i < state.messages.length; i++) {
-    if (matchesFilter(state.messages[i])) {
+  for (let i = 0; i < ring.length; i++) {
+    if (matchesFilter(ring.get(i))) {
       state.filtered.push(i);
     }
   }
@@ -983,8 +1085,8 @@ function applySorting() {
   const asc = state.sortAsc;
 
   state.filtered.sort((ai, bi) => {
-    const a = getSortValue(state.messages[ai], col);
-    const b = getSortValue(state.messages[bi], col);
+    const a = getSortValue(ring.get(ai), col);
+    const b = getSortValue(ring.get(bi), col);
     let cmp;
     if (typeof a === "string" && typeof b === "string") {
       cmp = a.localeCompare(b);
@@ -1030,95 +1132,118 @@ function formatTime(ts) {
     "." + String(d.getMilliseconds()).padStart(3, "0");
 }
 
-function createMsgRow(msg) {
-  const row = document.createElement("div");
-  const hasError = msg.decode_error || msg.parse_error;
-  row.className = "msg-row" + (hasError ? " parse-error" : "");
-  row.dataset.seq = msg.seq;
+// -----------------------------------------------------------------------
+// Virtual list — only renders visible rows + overscan
+// -----------------------------------------------------------------------
+const ROW_HEIGHT = 22;   // fixed row height in px (enforced via CSS)
+const OVERSCAN = 10;     // extra rows above/below viewport
+let vlSpacer = null;     // top spacer div (created on first render)
+let vlViewport = null;   // the visible row container
 
+function ensureVirtualListDOM() {
+  if (vlSpacer) return;
+  // msgList becomes the scroll container; we add a spacer + viewport inside
+  msgList.innerHTML = "";
+  vlSpacer = document.createElement("div");
+  vlSpacer.style.cssText = "width:100%;flex-shrink:0;";
+  vlViewport = document.createElement("div");
+  vlViewport.style.cssText = "width:100%;";
+  msgList.appendChild(vlSpacer);
+  msgList.appendChild(vlViewport);
+  // Delegated click handler — single listener for all rows
+  vlViewport.addEventListener("click", (e) => {
+    const row = e.target.closest(".msg-row");
+    if (row) selectMessage(parseInt(row.dataset.seq));
+  });
+}
+
+function renderMsgRowHTML(msg) {
+  const hasError = msg.decode_error || msg.parse_error;
+  const cls = "msg-row" + (hasError ? " parse-error" : "") +
+    (msg.seq === state.selectedSeq ? " selected" : "");
   const cats = messageCategories(msg);
   const plugin = messagePlugin(msg);
   const catStr = cats.length > 0 ? cats.join(",") : plugin;
   const summary = messageSummary(msg);
-
-  row.innerHTML =
+  return '<div class="' + cls + '" data-seq="' + msg.seq + '">' +
     '<div class="col-seq">' + msg.seq + '</div>' +
     '<div class="col-time">' + formatTime(msg.ts) + '</div>' +
     '<div class="col-ip">' + msg.src_ip + ':' + msg.src_port + '</div>' +
     '<div class="col-cat">' + catStr + '</div>' +
     '<div class="col-summary" title="' + escapeHtml(summary) + '">' + escapeHtml(summary) + '</div>' +
-    '<div class="col-size">' + msg.size + '</div>';
+    '<div class="col-size">' + msg.size + '</div></div>';
+}
 
-  row.addEventListener("click", () => selectMessage(msg.seq));
-  return row;
+// Track which slice is currently rendered to avoid no-op repaints
+let vlRenderedStart = -1;
+let vlRenderedEnd = -1;
+
+// Render virtual list at an explicit scroll offset (or current scrollTop)
+function renderVirtualList(forceScrollTop) {
+  ensureVirtualListDOM();
+  const totalRows = state.filtered.length;
+
+  // If a target scrollTop is given, set the scroll geometry first so the
+  // browser doesn't clamp scrollTop to a stale scrollHeight.
+  if (forceScrollTop !== undefined) {
+    // Set full scroll height via spacer + padding BEFORE setting scrollTop
+    vlSpacer.style.height = (totalRows * ROW_HEIGHT) + "px";
+    vlViewport.style.paddingBottom = "0px";
+    vlViewport.innerHTML = "";
+    msgList.scrollTop = forceScrollTop;
+  }
+
+  const scrollTop = msgList.scrollTop;
+  const viewHeight = msgList.clientHeight;
+
+  let startIdx = Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN;
+  let endIdx = Math.ceil((scrollTop + viewHeight) / ROW_HEIGHT) + OVERSCAN;
+  startIdx = Math.max(0, startIdx);
+  endIdx = Math.min(totalRows, endIdx);
+
+  // Skip repaint if the visible slice hasn't changed
+  if (startIdx === vlRenderedStart && endIdx === vlRenderedEnd) return;
+  vlRenderedStart = startIdx;
+  vlRenderedEnd = endIdx;
+
+  // Set spacer to push viewport rows into correct scroll position
+  vlSpacer.style.height = (startIdx * ROW_HEIGHT) + "px";
+  const bottomPad = Math.max(0, (totalRows - endIdx) * ROW_HEIGHT);
+  vlViewport.style.paddingBottom = bottomPad + "px";
+
+  // Build visible rows as one innerHTML write
+  let html = "";
+  for (let i = startIdx; i < endIdx; i++) {
+    const msg = ring.get(state.filtered[i]);
+    if (msg) html += renderMsgRowHTML(msg);
+  }
+  vlViewport.innerHTML = html;
 }
 
 function renderFullList() {
-  msgList.innerHTML = "";
-  const frag = document.createDocumentFragment();
-  for (const idx of state.filtered) {
-    frag.appendChild(createMsgRow(state.messages[idx]));
-  }
-  msgList.appendChild(frag);
+  vlRenderedStart = vlRenderedEnd = -1;
   if (state.autoScroll && !state.paused) {
     tailSnap();
+  } else {
+    renderVirtualList();
   }
 }
 
-function appendToList(msg) {
-  if (!matchesFilter(msg)) return;
-  state.filtered.push(state.messages.length - 1);
-
-  if (state.paused) return; // buffered, will render on unpause
-
-  // When tail is on we need sorted position; re-sort and re-render
-  // for non-seq sorts, since new message may not belong at the end
-  if (state.sortCol !== "seq" || !state.sortAsc) {
-    applySorting();
-    renderFullListNoTail();
-    tailSnap();
-    return;
-  }
-
-  // Default case: seq ascending — just append
-  msgList.appendChild(createMsgRow(msg));
-
-  if (state.autoScroll) {
-    tailSnap();
-  }
-}
-
-// Render without triggering tail (used by appendToList to avoid recursion)
-function renderFullListNoTail() {
-  msgList.innerHTML = "";
-  const frag = document.createDocumentFragment();
-  for (const idx of state.filtered) {
-    frag.appendChild(createMsgRow(state.messages[idx]));
-  }
-  msgList.appendChild(frag);
-}
-
-// Tail snap: select the latest message and scroll it into view
+// Tail snap: jump to the end of the list
 function tailSnap() {
   if (!state.autoScroll) return;
+  if (state.filtered.length === 0) return;
 
-  // The "latest" message is the last one in the sorted list
-  // In ascending sort, latest is at the bottom; in descending, at the top
-  const rows = msgList.querySelectorAll(".msg-row");
-  if (rows.length === 0) return;
+  // Select the tail message directly
+  const tailIdx = state.sortAsc ? state.filtered.length - 1 : 0;
+  const msg = ring.get(state.filtered[tailIdx]);
+  if (msg) state.selectedSeq = msg.seq;
 
-  const targetRow = state.sortAsc ? rows[rows.length - 1] : rows[0];
-  const seq = parseInt(targetRow.dataset.seq);
-
-  // Select it (updates detail panes)
-  selectMessage(seq);
-
-  // Scroll: ascending → bottom, descending → top
-  if (state.sortAsc) {
-    msgList.scrollTop = msgList.scrollHeight;
-  } else {
-    msgList.scrollTop = 0;
-  }
+  // Compute target scroll position and render with it
+  const totalHeight = state.filtered.length * ROW_HEIGHT;
+  const targetScroll = state.sortAsc ? totalHeight : 0;
+  vlRenderedStart = vlRenderedEnd = -1;
+  renderVirtualList(targetScroll);
 }
 
 // -----------------------------------------------------------------------
@@ -1439,45 +1564,62 @@ function renderHexDump(msg) {
 function selectMessage(seq) {
   state.selectedSeq = seq;
 
-  // Update row highlight
-  msgList.querySelectorAll(".msg-row.selected").forEach(r => r.classList.remove("selected"));
-  const row = msgList.querySelector('.msg-row[data-seq="' + seq + '"]');
-  if (row) {
-    row.classList.add("selected");
-    // Scroll row into view if needed
-    const listRect = msgList.getBoundingClientRect();
-    const rowRect = row.getBoundingClientRect();
-    if (rowRect.top < listRect.top) {
-      row.scrollIntoView({ block: "nearest" });
-    } else if (rowRect.bottom > listRect.bottom) {
-      row.scrollIntoView({ block: "nearest" });
+  // Update highlight in virtual list
+  if (vlViewport) {
+    vlViewport.querySelectorAll(".msg-row.selected").forEach(r => r.classList.remove("selected"));
+    const row = vlViewport.querySelector('.msg-row[data-seq="' + seq + '"]');
+    if (row) {
+      row.classList.add("selected");
+    } else {
+      // Row not currently rendered — scroll it into view
+      const filtIdx = _findFilteredIndexBySeq(seq);
+      if (filtIdx >= 0) {
+        msgList.scrollTop = filtIdx * ROW_HEIGHT;
+        vlRenderedStart = vlRenderedEnd = -1;
+        renderVirtualList();
+      }
     }
   }
 
-  // Find message
-  const msg = state.messages.find(m => m.seq === seq);
+  // Find message by seq — use filtered index for fast lookup
+  const filtIdx = _findFilteredIndexBySeq(seq);
+  const msg = filtIdx >= 0 ? ring.get(state.filtered[filtIdx]) : null;
   renderDecodedTree(msg);
   renderHexDump(msg);
 }
 
-// Get the seq of the currently visible row above/below selection
+// Find the position in state.filtered for a given seq
+function _findFilteredIndexBySeq(seq) {
+  for (let i = 0; i < state.filtered.length; i++) {
+    const msg = ring.get(state.filtered[i]);
+    if (msg && msg.seq === seq) return i;
+  }
+  return -1;
+}
+
+// Navigate to adjacent message in the filtered list (data-driven, no DOM scan)
 function getAdjacentSeq(direction) {
-  const rows = msgList.querySelectorAll(".msg-row");
-  if (rows.length === 0) return null;
+  if (state.filtered.length === 0) return null;
 
   if (state.selectedSeq === null) {
-    // Nothing selected — pick first or last
-    return parseInt(direction > 0 ? rows[0].dataset.seq : rows[rows.length - 1].dataset.seq);
+    const idx = direction > 0 ? 0 : state.filtered.length - 1;
+    return ring.get(state.filtered[idx]).seq;
   }
 
-  for (let i = 0; i < rows.length; i++) {
-    if (parseInt(rows[i].dataset.seq) === state.selectedSeq) {
-      const next = i + direction;
-      if (next >= 0 && next < rows.length) {
-        return parseInt(rows[next].dataset.seq);
-      }
-      return null; // already at boundary
+  const curIdx = _findFilteredIndexBySeq(state.selectedSeq);
+  if (curIdx < 0) return null;
+  const next = curIdx + direction;
+  if (next >= 0 && next < state.filtered.length) {
+    // Scroll into view if needed
+    const scrollTop = msgList.scrollTop;
+    const viewHeight = msgList.clientHeight;
+    const rowTop = next * ROW_HEIGHT;
+    if (rowTop < scrollTop) {
+      msgList.scrollTop = rowTop;
+    } else if (rowTop + ROW_HEIGHT > scrollTop + viewHeight) {
+      msgList.scrollTop = rowTop + ROW_HEIGHT - viewHeight;
     }
+    return ring.get(state.filtered[next]).seq;
   }
   return null;
 }
@@ -1594,6 +1736,8 @@ function updateFilterDropdowns(msg) {
 }
 
 function onFilterChange() {
+  _filterCache = null;
+  _mapFirstRender = true; // re-fit bounds on filter change
   writeHash();
   rebuildFiltered();
   renderFullList();
@@ -1654,7 +1798,7 @@ async function pollStats() {
     const resp = await fetch("/api/stats");
     const data = await resp.json();
     $("#stat-rate").textContent = data.messages_per_sec;
-    $("#stat-buffer").textContent = data.buffer_size;
+    $("#stat-buffer").textContent = ring.length;
     $("#stat-tracks").textContent = data.tracks || 0;
     $("#stat-clients").textContent = data.connected_clients;
   } catch (e) { /* ignore */ }
@@ -1681,24 +1825,20 @@ function connectWS() {
     const data = JSON.parse(event.data);
 
     if (data.type === "snapshot") {
-      state.messages = data.messages;
+      ring.clear();
+      msgQueue.length = 0;
       if (data.plugins) state.plugins = data.plugins;
       if (data.tracks) state.tracks = data.tracks;
-      // Populate filter dropdowns from all messages
-      for (const msg of state.messages) {
-        updateFilterDropdowns(msg);
-      }
       rebuildFiltered();
       renderFullList();
       rebuildMap();
     } else if (data.type === "new") {
+      // Queue messages — RAF loop will drain and render
       for (const msg of data.messages) {
-        state.messages.push(msg);
-        updateFilterDropdowns(msg);
-        appendToList(msg);
+        msgQueue.push(msg);
       }
+      scheduleRaf();
     } else if (data.type === "tracks") {
-      // Merge track updates from server
       if (data.updates) {
         for (const key in data.updates) {
           state.tracks[key] = data.updates[key];
@@ -1720,6 +1860,63 @@ function connectWS() {
     console.error("WebSocket error:", err);
     ws.close();
   };
+}
+
+// -----------------------------------------------------------------------
+// RAF render loop — drains msgQueue at display refresh rate
+// -----------------------------------------------------------------------
+function scheduleRaf() {
+  if (!rafId) rafId = requestAnimationFrame(drainQueue);
+}
+
+function drainQueue() {
+  rafId = null;
+  if (msgQueue.length === 0 && !state.renderDirty) return;
+
+  // 1. Move queued messages into ring buffer
+  const batch = msgQueue.splice(0, msgQueue.length);
+  const prevSize = ring.length;
+  const wasFull = prevSize >= ring.capacity;
+  for (const msg of batch) {
+    ring.push(msg);
+    updateFilterDropdowns(msg);
+  }
+  // How many items were evicted (overwritten by wraparound)?
+  const evicted = wasFull ? batch.length : Math.max(0, (prevSize + batch.length) - ring.capacity);
+
+  // 2. Update filtered index
+  if (state.renderDirty || state.sortCol !== "seq" || !state.sortAsc) {
+    state.renderDirty = false;
+    rebuildFiltered();
+  } else if (!state.paused && batch.length > 0) {
+    // Fast path: adjust indices for eviction, then filter new messages only
+    if (evicted > 0) {
+      // Shift existing filtered indices down and drop negatives
+      let write = 0;
+      for (let r = 0; r < state.filtered.length; r++) {
+        const shifted = state.filtered[r] - evicted;
+        if (shifted >= 0) {
+          state.filtered[write++] = shifted;
+        }
+      }
+      state.filtered.length = write;
+    }
+    // Filter only the newly added messages
+    const base = ring.length - batch.length;
+    for (let i = Math.max(0, base); i < ring.length; i++) {
+      if (matchesFilter(ring.get(i))) {
+        state.filtered.push(i);
+      }
+    }
+  }
+
+  // 4. Render virtual list (only visible rows)
+  if (state.autoScroll && !state.paused) {
+    tailSnap();
+  } else {
+    vlRenderedStart = vlRenderedEnd = -1; // force repaint
+    renderVirtualList();
+  }
 }
 
 // -----------------------------------------------------------------------
@@ -1753,10 +1950,9 @@ function setupResize() {
 // -----------------------------------------------------------------------
 // Utility
 // -----------------------------------------------------------------------
+const _escapeMap = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" };
 function escapeHtml(str) {
-  const div = document.createElement("div");
-  div.textContent = str;
-  return div.innerHTML;
+  return String(str).replace(/[&<>"']/g, c => _escapeMap[c]);
 }
 
 // -----------------------------------------------------------------------
@@ -1819,120 +2015,126 @@ function polarToLatLon(sensorLat, sensorLon, rhoNM, thetaDeg) {
   return [sensorLat + dLat, sensorLon + dLon];
 }
 
-// Rebuild map from server-side track store
+// Diff-based map update — only add/remove/move what changed
+let _mapFirstRender = true;
+
+function _buildTrackTooltip(entity) {
+  let tip = entity.label || "";
+  if (entity.entity_type === "sensor") {
+    if (entity.alt_m != null) tip += "<br>Alt: " + entity.alt_m.toFixed(0) + "m";
+  } else {
+    if (entity.alt_m != null) tip += "<br>Alt: " + (entity.alt_m * 3.28084).toFixed(0) + " ft";
+    if (entity.speed_mps != null) tip += "<br>Spd: " + (entity.speed_mps / 0.514444).toFixed(0) + " kn";
+    if (entity.heading_deg != null) tip += "<br>Hdg: " + entity.heading_deg.toFixed(0) + "\u00B0";
+  }
+  for (const pk in (entity.properties || {})) {
+    if (entity.properties[pk]) tip += "<br>" + pk + ": " + entity.properties[pk];
+  }
+  return tip;
+}
+
+function _trackPassesFilter(entity, catVal, catNum, searchVal) {
+  if (catVal) {
+    const plugin = entity.source_plugin || "";
+    if (isNaN(catNum)) {
+      if (plugin !== catVal) return false;
+    } else {
+      if (plugin !== "asterix") return false;
+    }
+  }
+  if (searchVal) {
+    const label = (entity.label || "").toLowerCase();
+    const id = (entity.entity_id || "").toLowerCase();
+    if (!label.includes(searchVal) && !id.includes(searchVal)) {
+      const props = JSON.stringify(entity.properties || {}).toLowerCase();
+      if (!props.includes(searchVal)) return false;
+    }
+  }
+  return true;
+}
+
 function rebuildMap() {
   if (!leafletMap || !mapContainer.classList.contains("visible")) return;
 
-  // Clear existing layers
-  for (const key in mapTrackLayers) {
-    mapTrackLayers[key].polyline.remove();
-    mapTrackLayers[key].marker.remove();
-  }
-  mapTrackLayers = {};
-  for (const key in mapSensorMarkers) {
-    mapSensorMarkers[key].remove();
-  }
-  mapSensorMarkers = {};
-
-  // Determine which plugins pass the current filter
   const catVal = filterCat.value;
-  const ipVal = filterIP.value;
+  const catNum = catVal ? parseInt(catVal) : NaN;
   const searchVal = filterSearch.value.toLowerCase();
 
-  function trackPassesFilter(entity) {
-    // Plugin/category filter
-    if (catVal) {
-      const plugin = entity.source_plugin || "";
-      // catVal can be a plugin ID ("adsb") or a numeric category ("48")
-      const numVal = parseInt(catVal);
-      if (isNaN(numVal)) {
-        // String filter: match plugin ID
-        if (plugin !== catVal) return false;
-      } else {
-        // Numeric filter (ASTERIX category): only ASTERIX plugin tracks pass
-        if (plugin !== "asterix") return false;
-      }
-    }
-    // IP filter: match source_plugin's expected IP (approximate — tracks don't carry src_ip)
-    // For now, skip IP filtering on map since tracks don't have src_ip
-    // Search filter: match label or properties
-    if (searchVal) {
-      const label = (entity.label || "").toLowerCase();
-      const id = (entity.entity_id || "").toLowerCase();
-      const props = JSON.stringify(entity.properties || {}).toLowerCase();
-      if (!label.includes(searchVal) && !id.includes(searchVal) && !props.includes(searchVal)) return false;
-    }
-    return true;
-  }
-
-  const bounds = [];
+  const activeKeys = new Set();
   let colorIdx = 0;
 
   for (const key in state.tracks) {
     const track = state.tracks[key];
     const entity = track.entity;
     if (!entity || entity.lat == null || entity.lon == null) continue;
-    if (!trackPassesFilter(entity)) continue;
+    if (!_trackPassesFilter(entity, catVal, catNum, searchVal)) continue;
 
+    activeKeys.add(key);
     const pluginColor = (state.plugins[entity.source_plugin] || {}).color || "#888";
 
     if (entity.entity_type === "sensor") {
-      // Sensor marker
-      const marker = L.circleMarker([entity.lat, entity.lon], {
-        radius: 8,
-        color: "#ffffff",
-        fillColor: pluginColor,
-        fillOpacity: 0.9,
-        weight: 2,
-      }).addTo(leafletMap);
-      let tip = entity.label;
-      if (entity.alt_m != null) tip += "<br>Alt: " + entity.alt_m.toFixed(0) + "m";
-      for (const pk in (entity.properties || {})) {
-        tip += "<br>" + pk + ": " + entity.properties[pk];
+      // Sensor: update in place or create
+      const existing = mapSensorMarkers[key];
+      if (existing) {
+        existing.setLatLng([entity.lat, entity.lon]);
+        existing.setTooltipContent(_buildTrackTooltip(entity));
+      } else {
+        const marker = L.circleMarker([entity.lat, entity.lon], {
+          radius: 8, color: "#ffffff", fillColor: pluginColor, fillOpacity: 0.9, weight: 2,
+        }).addTo(leafletMap);
+        marker.bindTooltip(_buildTrackTooltip(entity), { permanent: false });
+        mapSensorMarkers[key] = marker;
       }
-      marker.bindTooltip(tip, { permanent: false });
-      mapSensorMarkers[key] = marker;
-      bounds.push([entity.lat, entity.lon]);
 
     } else if (entity.entity_type === "track" || entity.entity_type === "detection") {
-      // Track trail from history
-      const color = trackColor(colorIdx++);
       const history = track.history || [];
       const latlngs = history
         .filter(h => h.lat != null && h.lon != null)
         .map(h => [h.lat, h.lon]);
-      // Add current position
       latlngs.push([entity.lat, entity.lon]);
 
-      const polyline = L.polyline(latlngs, {
-        color: color,
-        weight: 2,
-        opacity: 0.6,
-      }).addTo(leafletMap);
-
-      const marker = L.circleMarker([entity.lat, entity.lon], {
-        radius: 5,
-        color: color,
-        fillColor: color,
-        fillOpacity: 1,
-        weight: 1,
-      }).addTo(leafletMap);
-
-      let tip = entity.label;
-      if (entity.alt_m != null) tip += "<br>Alt: " + (entity.alt_m * 3.28084).toFixed(0) + " ft";
-      if (entity.speed_mps != null) tip += "<br>Spd: " + (entity.speed_mps / 0.514444).toFixed(0) + " kn";
-      if (entity.heading_deg != null) tip += "<br>Hdg: " + entity.heading_deg.toFixed(0) + "\u00B0";
-      for (const pk in (entity.properties || {})) {
-        if (entity.properties[pk]) tip += "<br>" + pk + ": " + entity.properties[pk];
+      const existing = mapTrackLayers[key];
+      if (existing) {
+        // Update in place — move marker, update polyline
+        existing.marker.setLatLng([entity.lat, entity.lon]);
+        existing.polyline.setLatLngs(latlngs);
+        existing.marker.setTooltipContent(_buildTrackTooltip(entity));
+      } else {
+        const color = trackColor(colorIdx);
+        const polyline = L.polyline(latlngs, { color, weight: 2, opacity: 0.6 }).addTo(leafletMap);
+        const marker = L.circleMarker([entity.lat, entity.lon], {
+          radius: 5, color, fillColor: color, fillOpacity: 1, weight: 1,
+        }).addTo(leafletMap);
+        marker.bindTooltip(_buildTrackTooltip(entity), { permanent: false });
+        mapTrackLayers[key] = { polyline, marker };
       }
-      marker.bindTooltip(tip, { permanent: false });
-
-      mapTrackLayers[key] = { polyline, marker };
-      bounds.push(...latlngs);
+      colorIdx++;
     }
   }
 
-  if (bounds.length > 0) {
+  // Remove tracks/sensors that are no longer active
+  for (const key in mapTrackLayers) {
+    if (!activeKeys.has(key)) {
+      mapTrackLayers[key].polyline.remove();
+      mapTrackLayers[key].marker.remove();
+      delete mapTrackLayers[key];
+    }
+  }
+  for (const key in mapSensorMarkers) {
+    if (!activeKeys.has(key)) {
+      mapSensorMarkers[key].remove();
+      delete mapSensorMarkers[key];
+    }
+  }
+
+  // Only fit bounds on first render (not every periodic update)
+  if (_mapFirstRender && activeKeys.size > 0) {
+    _mapFirstRender = false;
+    const bounds = [];
+    for (const key of activeKeys) {
+      const e = state.tracks[key].entity;
+      bounds.push([e.lat, e.lon]);
+    }
     leafletMap.fitBounds(bounds, { padding: [30, 30], maxZoom: 14 });
   }
 }
@@ -1945,7 +2147,7 @@ function toggleMap() {
 
   if (show) {
     initMap();
-    // Leaflet needs a tick to measure the container
+    _mapFirstRender = true; // fit bounds when opening map
     setTimeout(() => {
       leafletMap.invalidateSize();
       rebuildMap();
@@ -2000,6 +2202,20 @@ function toggleSettings() {
   if (open) renderSettings();
 }
 
+function clearAll() {
+  if (!confirm("Clear all messages and tracks?")) return;
+  ring.clear();
+  state.tracks = {};
+  state.filtered = [];
+  state.selectedSeq = null;
+  _mapFirstRender = true;
+  vlRenderedStart = vlRenderedEnd = -1;
+  renderVirtualList();
+  renderDecodedTree(null);
+  renderHexDump(null);
+  rebuildMap();
+}
+
 async function renderSettings() {
   let settingsData, pluginsMeta;
   try {
@@ -2022,8 +2238,12 @@ async function renderSettings() {
   html += '<div class="settings-field"><label>Config Directory</label>';
   html += '<input type="text" value="' + escapeHtml(settingsData.config_dir || "") + '" disabled></div>';
 
+  // Client-side message buffer setting (stored in localStorage)
+  html += '<div class="settings-field"><label>Message History (browser)</label>';
+  html += '<input type="number" id="settings-max-messages" value="' + getMaxMessages() + '" min="100" max="100000">';
+  html += '<span class="field-desc">Max messages kept in browser. Higher values use more memory.</span></div>';
+
   const globalFields = [
-    {key: "buffer_max_messages", label: "Buffer Max Messages", type: "number"},
     {key: "web_port", label: "Web Port", type: "number"},
     {key: "track_history_depth", label: "Track History Depth", type: "number"},
     {key: "track_stale_seconds", label: "Track Stale Timeout (s)", type: "number"},
@@ -2123,6 +2343,13 @@ async function renderSettings() {
 }
 
 async function saveGlobalSettings() {
+  // Save client-side message history setting
+  const maxMsgEl = document.getElementById("settings-max-messages");
+  if (maxMsgEl) {
+    setMaxMessages(Number(maxMsgEl.value));
+  }
+
+  // Save server-side global settings
   const body = {};
   settingsContent.querySelectorAll("[data-global-key]").forEach(el => {
     const key = el.dataset.globalKey;
@@ -2144,12 +2371,23 @@ async function savePluginSettings(pid) {
     else if (el.type === "number") body[key] = Number(el.value);
     else body[key] = el.value || null;
   });
-  await fetch("/api/settings/" + pid, {
+  const resp = await fetch("/api/settings/" + pid, {
     method: "PUT",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify(body),
   });
+  const result = await resp.json();
   renderSettings();
+  // Flash feedback on the plugin section header
+  const section = settingsContent.querySelector('[data-plugin="' + pid + '"]');
+  if (section) {
+    const hdr = section.querySelector(".settings-section-status");
+    if (hdr) {
+      hdr.textContent = result.restarted ? "Restarted" : "Saved";
+      hdr.className = "settings-section-status running";
+      setTimeout(() => renderSettings(), 1500);
+    }
+  }
 }
 
 async function restartPlugin(pid) {
@@ -2224,6 +2462,7 @@ function init() {
   themeToggle.addEventListener("click", toggleTheme);
   mapToggleBtn.addEventListener("click", toggleMap);
   settingsToggleBtn.addEventListener("click", toggleSettings);
+  $("#clear-all-btn").addEventListener("click", clearAll);
   $("#settings-close").addEventListener("click", toggleSettings);
   settingsOverlay.addEventListener("click", toggleSettings);
   setupMapResize();
@@ -2249,9 +2488,13 @@ function init() {
   // Detect scroll position — disengage/re-engage tail automatically
   // Ascending: tail edge is bottom. Descending: tail edge is top.
   msgList.addEventListener("scroll", () => {
+    // Re-render virtual list on scroll
+    renderVirtualList();
+    // Detect tail edge
+    const totalHeight = state.filtered.length * ROW_HEIGHT;
     let atEdge;
     if (state.sortAsc) {
-      atEdge = msgList.scrollHeight - msgList.scrollTop - msgList.clientHeight < 40;
+      atEdge = totalHeight - msgList.scrollTop - msgList.clientHeight < 40;
     } else {
       atEdge = msgList.scrollTop < 40;
     }

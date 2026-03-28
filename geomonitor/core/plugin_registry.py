@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from geomonitor.core.buffer import RingBuffer
+from geomonitor.core.buffer import RateCounter
 from geomonitor.core.models import DecodeResult, Message
 from geomonitor.core.plugin_base import PLUGIN_API_VERSION, PluginBase
 from geomonitor.core.track_store import TrackStore
@@ -71,12 +71,12 @@ class PluginRegistry:
 
     def __init__(
         self,
-        buffer: RingBuffer,
+        rate_counter: RateCounter,
         track_store: TrackStore,
         broadcast_fn: Any = None,  # async callable: (str) -> None
         plugins_dir: Path | None = None,
     ):
-        self._buffer = buffer
+        self._rate_counter = rate_counter
         self._track_store = track_store
         self._broadcast_fn = broadcast_fn
         self._plugins_dir = plugins_dir
@@ -235,6 +235,7 @@ class PluginRegistry:
         """Create the emit callback for a plugin."""
 
         async def emit(raw: bytes, src: tuple[str, int]) -> None:
+            t0 = time.monotonic()
             ts = time.time()
 
             # Decode
@@ -253,7 +254,7 @@ class PluginRegistry:
 
             # Build message
             msg = Message(
-                seq=self._buffer.next_seq(),
+                seq=self._rate_counter.next_seq(),
                 ts=ts,
                 plugin_id=plugin.plugin_id,
                 src_ip=src[0],
@@ -266,14 +267,16 @@ class PluginRegistry:
                 meta=result.meta,
             )
 
-            # Store
-            self._buffer.append(msg)
             if entities:
                 self._track_store.update(entities)
 
-            # Broadcast
+            # Broadcast (non-blocking queue)
             if self._broadcast_fn:
-                await self._broadcast_fn(msg)
+                self._broadcast_fn(msg)
+
+            # Count with emit duration for perf tracking
+            emit_time = time.monotonic() - t0
+            self._rate_counter.count(plugin.plugin_id, emit_time)
 
         return emit
 

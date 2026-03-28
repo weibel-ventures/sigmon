@@ -1,0 +1,30 @@
+{
+  "id": "gmti",
+  "name": "GMTI",
+  "version": "1.0.0",
+  "api_version": 1,
+  "description": "STANAG 4607 Ground Moving Target Indication — radar MTI data with target reports",
+  "author": "GeoMonitor",
+  "color": "#9B59B6",
+  "list_columns": [
+    {"key": "platform", "label": "Platform", "width": 80, "sortable": true},
+    {"key": "targets", "label": "Targets", "width": 50, "sortable": true},
+    {"key": "summary", "label": "Summary", "width": null, "sortable": true}
+  ],
+  "settings_schema": {
+    "type": "object",
+    "properties": {
+      "udp_port": {
+        "type": "integer",
+        "title": "UDP Port",
+        "default": 7607,
+        "minimum": 1,
+        "maximum": 65535,
+        "description": "UDP port for STANAG 4607 packets"
+      }
+    }
+  },
+  "entity_types": ["sensor", "detection"],
+  "map_layer": true,
+  "supports_hex_dump": true
+}

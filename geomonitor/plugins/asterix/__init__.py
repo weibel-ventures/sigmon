@@ -141,9 +141,10 @@ class AsterixPlugin(PluginBase):
                 alt_ft = block.get("I110", {}).get("3D_Height", {}).get("val")
                 hdg = block.get("I200", {}).get("CHdg", {}).get("val")
                 spd_kn = block.get("I200", {}).get("CGS", {}).get("val")
+                callsign = block.get("I240", {}).get("TId", {}).get("val", "").strip()
 
                 entity_id = f"{sensor_key}:{tn}" if tn is not None else None
-                label = f"Trk#{tn}" if tn is not None else "Unknown"
+                label = callsign or (f"Trk#{tn}" if tn is not None else "Unknown")
 
                 entities.append(NormalizedEntity(
                     entity_type=EntityType.TRACK,
@@ -156,7 +157,126 @@ class AsterixPlugin(PluginBase):
                     label=label,
                     symbol_code=None, confidence=None,
                     source_plugin=self.plugin_id,
-                    properties={},
+                    properties={"cat": 48, "track_num": tn},
+                ))
+
+            # Cat 62: SDPS system track — position in I105 (WGS-84) or I100 (Cartesian)
+            if cat == 62:
+                sac = block.get("I010", {}).get("SAC", {}).get("val", 0)
+                sic = block.get("I010", {}).get("SIC", {}).get("val", 0)
+                tn = block.get("I040", {}).get("TrkN", {}).get("val")
+                if tn is None:
+                    tn = block.get("I040", {}).get("val")
+
+                lat = lon = None
+                # I105: calculated WGS-84 position (preferred)
+                i105 = block.get("I105", {})
+                if "Lat" in i105 and "Lon" in i105:
+                    lat = i105["Lat"]["val"]
+                    lon = i105["Lon"]["val"]
+                elif "Lat" in i105 and "Lng" in i105:
+                    lat = i105["Lat"]["val"]
+                    lon = i105["Lng"]["val"]
+
+                # I100: Cartesian X/Y (0.5m resolution) — needs sensor position for reference
+                if lat is None and "I100" in block:
+                    i100 = block["I100"]
+                    x = i100.get("X", {}).get("val")
+                    y = i100.get("Y", {}).get("val")
+                    sensor_key = f"{sac}:{sic}"
+                    sensor = self._sensor_positions.get(sensor_key)
+                    if x is not None and y is not None and sensor:
+                        # X/Y in metres from sensor, convert to lat/lon
+                        lat = sensor[0] + y / 111320.0
+                        lon = sensor[1] + x / (111320.0 * math.cos(math.radians(sensor[0])))
+
+                if lat is None or lon is None:
+                    continue
+
+                # Altitude from I130 (geometric, 6.25 ft resolution) or I135 (barometric)
+                alt_ft = block.get("I130", {}).get("Alt", {}).get("val")
+                if alt_ft is None:
+                    alt_ft = block.get("I135", {}).get("CTL", {}).get("val")
+                    if alt_ft is None:
+                        alt_ft = block.get("I135", {}).get("Alt", {}).get("val")
+
+                # Speed and heading from I185 (Cartesian vx/vy) or I200
+                hdg = None
+                spd_kn = None
+                i185 = block.get("I185", {})
+                vx = i185.get("Vx", {}).get("val")
+                vy = i185.get("Vy", {}).get("val")
+                if vx is not None and vy is not None:
+                    spd_mps = math.sqrt(vx ** 2 + vy ** 2)
+                    hdg = math.degrees(math.atan2(vx, vy)) % 360
+                else:
+                    i200 = block.get("I200", {})
+                    hdg = i200.get("CHdg", {}).get("val")
+                    if hdg is None:
+                        hdg = i200.get("TrkAng", {}).get("val")
+                    spd_kn = i200.get("CGS", {}).get("val")
+                    if spd_kn is None:
+                        spd_kn = i200.get("GrdSpd", {}).get("val")
+                    spd_mps = None
+
+                callsign = block.get("I245", {}).get("TId", {}).get("val", "").strip()
+                if not callsign:
+                    callsign = block.get("I380", {}).get("ADR", {}).get("val", "").strip()
+
+                entity_id = f"sdps:{sac}:{sic}:{tn}" if tn is not None else None
+                label = callsign or (f"Sys#{tn}" if tn is not None else "Unknown")
+
+                props: dict[str, Any] = {"cat": 62}
+                if tn is not None:
+                    props["track_num"] = tn
+                mode3a = block.get("I060", {}).get("Mode3A", {}).get("val")
+                if mode3a:
+                    props["squawk"] = mode3a
+
+                entities.append(NormalizedEntity(
+                    entity_type=EntityType.TRACK,
+                    entity_id=entity_id,
+                    lat=lat, lon=lon,
+                    alt_m=_feet_to_meters(alt_ft) if alt_ft is not None else None,
+                    heading_deg=hdg,
+                    speed_mps=spd_mps if spd_mps is not None else _knots_to_mps(spd_kn),
+                    timestamp=None,
+                    label=label,
+                    symbol_code=None, confidence=None,
+                    source_plugin=self.plugin_id,
+                    properties=props,
+                ))
+
+            # Cat 65: SDPS service status — emit as sensor entity
+            if cat == 65:
+                sac = block.get("I010", {}).get("SAC", {}).get("val", 0)
+                sic = block.get("I010", {}).get("SIC", {}).get("val", 0)
+                sensor_key = f"sdps:{sac}:{sic}"
+                sensor = self._sensor_positions.get(f"{sac}:{sic}")
+                if not sensor:
+                    continue
+
+                msg_type = block.get("I000", {}).get("MsgTyp", {}).get("val", "")
+                nogo = block.get("I040", {}).get("NOGO", {}).get("val")
+                ovl = block.get("I040", {}).get("OVL", {}).get("val")
+
+                props = {"cat": 65, "sac": sac, "sic": sic}
+                if msg_type:
+                    props["msg_type"] = msg_type
+                if nogo is not None:
+                    props["nogo"] = nogo
+                if ovl is not None:
+                    props["overload"] = ovl
+
+                entities.append(NormalizedEntity(
+                    entity_type=EntityType.SENSOR,
+                    entity_id=sensor_key,
+                    lat=sensor[0], lon=sensor[1], alt_m=sensor[2],
+                    heading_deg=None, speed_mps=None, timestamp=None,
+                    label=f"SDPS {sac}:{sic}",
+                    symbol_code=None, confidence=None,
+                    source_plugin=self.plugin_id,
+                    properties=props,
                 ))
 
         return entities

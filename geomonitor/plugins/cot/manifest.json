@@ -1,0 +1,45 @@
+{
+  "id": "cot",
+  "name": "CoT/TAK",
+  "version": "1.0.0",
+  "api_version": 1,
+  "description": "Cursor on Target (CoT) — situational awareness events via UDP/TCP (TAK, ATAK, WinTAK)",
+  "author": "GeoMonitor",
+  "color": "#FFB800",
+  "entry_point": "CotPlugin",
+  "columns": ["UID", "Type", "Callsign", "Summary"],
+  "settings_schema": {
+    "type": "object",
+    "properties": {
+      "mode": {
+        "type": "string",
+        "title": "Listen Mode",
+        "enum": ["udp", "tcp"],
+        "default": "udp",
+        "description": "UDP multicast/unicast or TCP server"
+      },
+      "udp_port": {
+        "type": "integer",
+        "title": "UDP Port",
+        "default": 6969,
+        "description": "SA multicast port (default CoT/TAK: 6969)"
+      },
+      "multicast_group": {
+        "type": "string",
+        "title": "Multicast Group",
+        "default": "239.2.3.1",
+        "description": "Multicast group to join (blank for unicast)"
+      },
+      "tcp_port": {
+        "type": "integer",
+        "title": "TCP Port",
+        "default": 8087,
+        "description": "TCP listen port (TAK server default: 8087)"
+      },
+      "enabled": {
+        "type": "boolean",
+        "default": true
+      }
+    }
+  }
+}

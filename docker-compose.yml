@@ -4,12 +4,11 @@ services:
     ports:
       - "${WEB_PORT:-8080}:${WEB_PORT:-8080}"
       - "${ASTERIX_UDP_PORT:-23401}:${ASTERIX_UDP_PORT:-23401}/udp"
+      - "${COT_UDP_PORT:-6969}:${COT_UDP_PORT:-6969}/udp"
+      - "${COT_TCP_PORT:-8087}:${COT_TCP_PORT:-8087}/tcp"
+      - "${GMTI_UDP_PORT:-7607}:${GMTI_UDP_PORT:-7607}/udp"
     volumes:
-      - sigmon-config:/etc/sigmon
+      - ./config:/etc/sigmon
     environment:
       - WEB_PORT=${WEB_PORT:-8080}
-      - BUFFER_MAX_MESSAGES=${BUFFER_MAX_MESSAGES:-50000}
       - SIGMON_CONFIG_DIR=/etc/sigmon
-
-volumes:
-  sigmon-config:

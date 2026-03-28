@@ -19,7 +19,6 @@ from typing import Any
 log = logging.getLogger("geomonitor.settings")
 
 DEFAULT_GLOBAL = {
-    "buffer_max_messages": 50_000,
     "web_port": 8080,
     "track_history_depth": 100,
     "track_stale_seconds": 300,

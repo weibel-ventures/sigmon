@@ -10,10 +10,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends g++ libexpat1-d
 
 COPY geomonitor/ geomonitor/
 
-# Config directory — settings persist here
-RUN mkdir -p /etc/sigmon/sigmon.d
+# Seed default config (only used if volume is empty)
+COPY config/ /etc/sigmon/
 ENV SIGMON_CONFIG_DIR=/etc/sigmon
 ENV WEB_PORT=8080
-ENV BUFFER_MAX_MESSAGES=50000
 
 CMD uvicorn geomonitor.core.app:app --host 0.0.0.0 --port ${WEB_PORT}
