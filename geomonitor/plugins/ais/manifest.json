@@ -1,0 +1,52 @@
+{
+    "id": "ais",
+    "name": "AIS",
+    "version": "1.0.0",
+    "description": "Automatic Identification System — maritime vessel tracking via NMEA 0183 (AIVDM/AIVDO)",
+    "author": "Weibel Ventures",
+    "icon": "ship",
+    "color": "#34C759",
+    "api_version": 1,
+
+    "ingestor": {
+        "type": "tcp_connect",
+        "default_port": 5631
+    },
+
+    "list_columns": [
+        {"key": "mmsi", "label": "MMSI", "width": 80, "sortable": true},
+        {"key": "vessel_name", "label": "Vessel", "width": 100, "sortable": true},
+        {"key": "msg_type", "label": "Type", "width": 40, "sortable": true},
+        {"key": "summary", "label": "Summary", "width": null, "sortable": true}
+    ],
+
+    "settings_schema": {
+        "type": "object",
+        "properties": {
+            "host": {
+                "type": "string",
+                "title": "Host",
+                "default": "153.44.253.27",
+                "description": "NMEA TCP source (AIS receiver, aggregator, or public feed)"
+            },
+            "port": {
+                "type": "integer",
+                "title": "Port",
+                "default": 5631,
+                "minimum": 1,
+                "maximum": 65535
+            },
+            "reconnect_delay": {
+                "type": "number",
+                "title": "Reconnect delay (s)",
+                "default": 5.0,
+                "minimum": 1,
+                "maximum": 60
+            }
+        }
+    },
+
+    "entity_types": ["track"],
+    "map_layer": true,
+    "supports_hex_dump": false
+}

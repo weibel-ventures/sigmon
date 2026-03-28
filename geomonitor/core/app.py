@@ -62,15 +62,17 @@ async def track_broadcaster():
 async def lifespan(app: FastAPI):
     global settings_mgr, buffer, track_store, ws_manager, registry
 
-    # Init settings
-    settings_path = Path(os.environ.get("SETTINGS_FILE", "settings.json"))
-    settings_mgr = SettingsManager(settings_path)
+    # Init settings — uses /etc/sigmon/ or SIGMON_CONFIG_DIR or ./config
+    config_dir = os.environ.get("SIGMON_CONFIG_DIR")
+    settings_mgr = SettingsManager(Path(config_dir) if config_dir else None)
 
     # Override from env vars
     if os.environ.get("WEB_PORT"):
         settings_mgr.set_global("web_port", int(os.environ["WEB_PORT"]))
     if os.environ.get("BUFFER_MAX_MESSAGES"):
         settings_mgr.set_global("buffer_max_messages", int(os.environ["BUFFER_MAX_MESSAGES"]))
+
+    log.info("Config dir: %s", settings_mgr.config_dir)
 
     global_cfg = settings_mgr.get_global()
 
@@ -180,6 +182,52 @@ async def update_settings(plugin_id: str, body: dict[str, Any]):
         await registry.restart_plugin(plugin_id, new)
 
     return {"ok": True, "settings": new, "restarted": needs_restart}
+
+
+@app.put("/api/settings/global")
+async def update_global_settings(body: dict[str, Any]):
+    new = settings_mgr.update_global(body)
+    return {"ok": True, "settings": new}
+
+
+@app.post("/api/plugins/{plugin_id}/restart")
+async def restart_plugin(plugin_id: str):
+    loaded = registry.plugins.get(plugin_id)
+    if not loaded:
+        return {"error": "Plugin not found"}
+    settings = settings_mgr.get_plugin(plugin_id)
+    await registry.restart_plugin(plugin_id, settings)
+    return {"ok": True, "running": loaded.running}
+
+
+@app.post("/api/plugins/{plugin_id}/stop")
+async def stop_plugin(plugin_id: str):
+    loaded = registry.plugins.get(plugin_id)
+    if not loaded:
+        return {"error": "Plugin not found"}
+    if loaded.running:
+        await loaded.instance.stop()
+        loaded.running = False
+    return {"ok": True, "running": False}
+
+
+@app.post("/api/plugins/{plugin_id}/enable")
+async def toggle_plugin(plugin_id: str, body: dict[str, Any]):
+    loaded = registry.plugins.get(plugin_id)
+    if not loaded:
+        return {"error": "Plugin not found"}
+    enabled = body.get("enabled", True)
+    loaded.enabled = enabled
+    settings_mgr.update_plugin(plugin_id, {"enabled": enabled})
+    if enabled and not loaded.running:
+        settings = settings_mgr.get_plugin(plugin_id)
+        emit = registry._make_emit(loaded.instance)
+        await loaded.instance.start(settings, emit)
+        loaded.running = True
+    elif not enabled and loaded.running:
+        await loaded.instance.stop()
+        loaded.running = False
+    return {"ok": True, "enabled": enabled, "running": loaded.running}
 
 
 @app.get("/api/tracks")

@@ -10,6 +10,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends g++ libexpat1-d
 
 COPY geomonitor/ geomonitor/
 
+# Config directory — settings persist here
+RUN mkdir -p /etc/sigmon/sigmon.d
+ENV SIGMON_CONFIG_DIR=/etc/sigmon
 ENV WEB_PORT=8080
 ENV BUFFER_MAX_MESSAGES=50000
 

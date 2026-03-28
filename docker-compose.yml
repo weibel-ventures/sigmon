@@ -5,7 +5,11 @@ services:
       - "${WEB_PORT:-8080}:${WEB_PORT:-8080}"
       - "${ASTERIX_UDP_PORT:-23401}:${ASTERIX_UDP_PORT:-23401}/udp"
     volumes:
-      - ./settings.json:/opt/geomonitor/settings.json
+      - sigmon-config:/etc/sigmon
     environment:
       - WEB_PORT=${WEB_PORT:-8080}
       - BUFFER_MAX_MESSAGES=${BUFFER_MAX_MESSAGES:-50000}
+      - SIGMON_CONFIG_DIR=/etc/sigmon
+
+volumes:
+  sigmon-config:

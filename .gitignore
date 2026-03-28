@@ -22,3 +22,6 @@ settings.json
 __pycache__/
 *.pyc
 .venv/
+
+# Test data samples (downloaded, not for repo)
+test_data/

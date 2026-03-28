@@ -494,6 +494,189 @@ html, body {
   flex-shrink: 0;
 }
 
+/* Settings panel */
+#settings-overlay {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.4);
+  z-index: 200;
+}
+#settings-overlay.open { display: block; }
+
+#settings-panel {
+  position: fixed;
+  top: 0; right: -420px;
+  width: 400px; height: 100vh;
+  background: var(--bg-secondary);
+  border-left: 1px solid var(--border);
+  z-index: 201;
+  display: flex;
+  flex-direction: column;
+  transition: right 0.25s ease;
+  box-shadow: -4px 0 20px rgba(0,0,0,0.3);
+}
+#settings-panel.open { right: 0; }
+
+#settings-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+#settings-header h2 {
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--text-bright);
+}
+#settings-close {
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 22px;
+  cursor: pointer;
+  padding: 0 4px;
+}
+#settings-close:hover { color: var(--text); }
+
+#settings-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.settings-section {
+  margin-bottom: 20px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.settings-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 14px;
+  background: var(--bg-tertiary);
+  cursor: pointer;
+  user-select: none;
+}
+.settings-section-header:hover { background: var(--bg-hover); }
+
+.settings-section-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-bright);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.settings-plugin-dot {
+  width: 10px; height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.settings-section-status {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+.settings-section-status.running { background: rgba(52,199,89,0.15); color: var(--green); }
+.settings-section-status.stopped { background: rgba(255,47,0,0.15); color: var(--red); }
+.settings-section-status.disabled { background: rgba(138,148,166,0.15); color: var(--text-dim); }
+
+.settings-section-body {
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.settings-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.settings-field label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+.settings-field input, .settings-field select {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 13px;
+  font-family: var(--mono);
+  outline: none;
+}
+.settings-field input:focus, .settings-field select:focus { border-color: var(--accent); }
+.settings-field .field-desc {
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.settings-actions {
+  display: flex;
+  gap: 6px;
+  padding-top: 6px;
+}
+
+.settings-btn {
+  padding: 5px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid var(--border);
+  background: var(--bg-tertiary);
+  color: var(--text);
+}
+.settings-btn:hover { background: var(--bg-hover); }
+.settings-btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+.settings-btn.primary:hover { opacity: 0.9; }
+.settings-btn.danger { color: var(--red); }
+.settings-btn.danger:hover { background: rgba(255,47,0,0.1); }
+
+.settings-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.settings-switch {
+  position: relative;
+  width: 36px; height: 20px;
+  cursor: pointer;
+}
+.settings-switch input { display: none; }
+.settings-switch .slider {
+  position: absolute;
+  inset: 0;
+  background: var(--border);
+  border-radius: 10px;
+  transition: background 0.2s;
+}
+.settings-switch .slider::after {
+  content: "";
+  position: absolute;
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  top: 2px; left: 2px;
+  transition: transform 0.2s;
+}
+.settings-switch input:checked + .slider { background: var(--green); }
+.settings-switch input:checked + .slider::after { transform: translateX(16px); }
+
 /* Scrollbar styling */
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: var(--bg); }
@@ -519,6 +702,10 @@ html, body {
     <div class="header-btn" id="map-toggle" title="Toggle map view (M)">
       <span class="icon" id="map-icon">&#9678;</span>
       <span>Map</span>
+    </div>
+    <div class="header-btn" id="settings-toggle" title="Settings (S)">
+      <span class="icon">&#9881;</span>
+      <span>Settings</span>
     </div>
     <div class="header-btn" id="theme-toggle" title="Toggle dark/light theme">
       <span class="icon" id="theme-icon">&#9790;</span>
@@ -586,6 +773,18 @@ html, body {
     </div>
   </div>
 </div>
+
+<!-- Settings panel (slide-out) -->
+<div id="settings-panel">
+  <div id="settings-header">
+    <h2>Settings</h2>
+    <button id="settings-close">&times;</button>
+  </div>
+  <div id="settings-body">
+    <div id="settings-content"></div>
+  </div>
+</div>
+<div id="settings-overlay"></div>
 
 <!-- Connection overlay -->
 <div id="connection-status">
@@ -1328,6 +1527,19 @@ function handleKeyDown(e) {
       toggleMap();
       break;
     }
+    case "s":
+    case "S": {
+      e.preventDefault();
+      toggleSettings();
+      break;
+    }
+    case "Escape": {
+      if (settingsPanel.classList.contains("open")) {
+        e.preventDefault();
+        toggleSettings();
+      }
+      break;
+    }
   }
 }
 
@@ -1775,6 +1987,182 @@ function setupMapResize() {
 }
 
 // -----------------------------------------------------------------------
+// Settings panel
+// -----------------------------------------------------------------------
+const settingsPanel = $("#settings-panel");
+const settingsOverlay = $("#settings-overlay");
+const settingsContent = $("#settings-content");
+const settingsToggleBtn = $("#settings-toggle");
+
+function toggleSettings() {
+  const open = settingsPanel.classList.toggle("open");
+  settingsOverlay.classList.toggle("open", open);
+  if (open) renderSettings();
+}
+
+async function renderSettings() {
+  let settingsData, pluginsMeta;
+  try {
+    const [sResp, pResp] = await Promise.all([fetch("/api/settings"), fetch("/api/plugins")]);
+    settingsData = await sResp.json();
+    pluginsMeta = await pResp.json();
+  } catch (e) {
+    settingsContent.innerHTML = '<p style="color:var(--red)">Failed to load settings</p>';
+    return;
+  }
+
+  let html = '';
+
+  // Global settings
+  html += '<div class="settings-section">';
+  html += '<div class="settings-section-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display===\'none\'?\'flex\':\'none\'">';
+  html += '<span class="settings-section-title">Global Settings</span>';
+  html += '</div>';
+  html += '<div class="settings-section-body">';
+  html += '<div class="settings-field"><label>Config Directory</label>';
+  html += '<input type="text" value="' + escapeHtml(settingsData.config_dir || "") + '" disabled></div>';
+
+  const globalFields = [
+    {key: "buffer_max_messages", label: "Buffer Max Messages", type: "number"},
+    {key: "web_port", label: "Web Port", type: "number"},
+    {key: "track_history_depth", label: "Track History Depth", type: "number"},
+    {key: "track_stale_seconds", label: "Track Stale Timeout (s)", type: "number"},
+  ];
+  for (const f of globalFields) {
+    const val = settingsData.global[f.key] || "";
+    html += '<div class="settings-field"><label>' + f.label + '</label>';
+    html += '<input type="' + f.type + '" data-global-key="' + f.key + '" value="' + val + '"></div>';
+  }
+  html += '<div class="settings-actions">';
+  html += '<button class="settings-btn primary" onclick="saveGlobalSettings()">Save</button>';
+  html += '</div></div></div>';
+
+  // Plugin sections
+  for (const [pid, meta] of Object.entries(pluginsMeta)) {
+    const pSettings = settingsData.plugins[pid] || {};
+    const running = meta.running;
+    const enabled = meta.enabled;
+    const statusCls = !enabled ? "disabled" : running ? "running" : "stopped";
+    const statusText = !enabled ? "Disabled" : running ? "Running" : "Stopped";
+
+    html += '<div class="settings-section" data-plugin="' + pid + '">';
+    html += '<div class="settings-section-header" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display===\'none\'?\'flex\':\'none\'">';
+    html += '<span class="settings-section-title">';
+    html += '<span class="settings-plugin-dot" style="background:' + (meta.color || "#888") + '"></span>';
+    html += escapeHtml(meta.name || pid);
+    html += '</span>';
+    html += '<span class="settings-section-status ' + statusCls + '">' + statusText + '</span>';
+    html += '</div>';
+    html += '<div class="settings-section-body">';
+
+    // Enable toggle
+    html += '<div class="settings-toggle-row">';
+    html += '<label style="font-size:13px;color:var(--text)">Enabled</label>';
+    html += '<label class="settings-switch">';
+    html += '<input type="checkbox" data-plugin-enable="' + pid + '"' + (enabled ? " checked" : "") + '>';
+    html += '<span class="slider"></span></label></div>';
+
+    // Plugin settings from schema
+    const schema = meta.settings_schema || {};
+    const props = schema.properties || {};
+    for (const [key, prop] of Object.entries(props)) {
+      const val = pSettings[key] !== undefined ? pSettings[key] : (prop.default !== undefined ? prop.default : "");
+      const label = prop.title || key;
+      const desc = prop.description || "";
+
+      html += '<div class="settings-field">';
+      html += '<label>' + escapeHtml(label) + '</label>';
+
+      if (prop.enum) {
+        html += '<select data-plugin-setting="' + pid + '.' + key + '">';
+        for (const opt of prop.enum) {
+          html += '<option value="' + opt + '"' + (String(val) === String(opt) ? ' selected' : '') + '>' + opt + '</option>';
+        }
+        html += '</select>';
+      } else if (prop.type === "integer" || prop.type === "number") {
+        html += '<input type="number" data-plugin-setting="' + pid + '.' + key + '" value="' + val + '"';
+        if (prop.minimum !== undefined) html += ' min="' + prop.minimum + '"';
+        if (prop.maximum !== undefined) html += ' max="' + prop.maximum + '"';
+        html += '>';
+      } else if (prop.type === "boolean") {
+        html += '<label class="settings-switch">';
+        html += '<input type="checkbox" data-plugin-setting="' + pid + '.' + key + '"' + (val ? " checked" : "") + '>';
+        html += '<span class="slider"></span></label>';
+      } else {
+        html += '<input type="text" data-plugin-setting="' + pid + '.' + key + '" value="' + escapeHtml(String(val === null ? "" : val)) + '">';
+      }
+
+      if (desc) html += '<span class="field-desc">' + escapeHtml(desc) + '</span>';
+      html += '</div>';
+    }
+
+    // Action buttons
+    html += '<div class="settings-actions">';
+    html += '<button class="settings-btn primary" onclick="savePluginSettings(\'' + pid + '\')">Save</button>';
+    html += '<button class="settings-btn" onclick="restartPlugin(\'' + pid + '\')">Restart</button>';
+    html += '<button class="settings-btn danger" onclick="stopPlugin(\'' + pid + '\')">Stop</button>';
+    html += '</div>';
+
+    html += '</div></div>';
+  }
+
+  settingsContent.innerHTML = html;
+
+  // Wire enable toggles
+  settingsContent.querySelectorAll("[data-plugin-enable]").forEach(el => {
+    el.addEventListener("change", async () => {
+      const pid = el.dataset.pluginEnable;
+      await fetch("/api/plugins/" + pid + "/enable", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({enabled: el.checked}),
+      });
+      renderSettings();
+    });
+  });
+}
+
+async function saveGlobalSettings() {
+  const body = {};
+  settingsContent.querySelectorAll("[data-global-key]").forEach(el => {
+    const key = el.dataset.globalKey;
+    body[key] = el.type === "number" ? Number(el.value) : el.value;
+  });
+  await fetch("/api/settings/global", {
+    method: "PUT",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body),
+  });
+  renderSettings();
+}
+
+async function savePluginSettings(pid) {
+  const body = {};
+  settingsContent.querySelectorAll("[data-plugin-setting^='" + pid + ".']").forEach(el => {
+    const key = el.dataset.pluginSetting.split(".").slice(1).join(".");
+    if (el.type === "checkbox") body[key] = el.checked;
+    else if (el.type === "number") body[key] = Number(el.value);
+    else body[key] = el.value || null;
+  });
+  await fetch("/api/settings/" + pid, {
+    method: "PUT",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body),
+  });
+  renderSettings();
+}
+
+async function restartPlugin(pid) {
+  await fetch("/api/plugins/" + pid + "/restart", {method: "POST"});
+  renderSettings();
+}
+
+async function stopPlugin(pid) {
+  await fetch("/api/plugins/" + pid + "/stop", {method: "POST"});
+  renderSettings();
+}
+
+// -----------------------------------------------------------------------
 // Theme
 // -----------------------------------------------------------------------
 const themeToggle = $("#theme-toggle");
@@ -1835,6 +2223,9 @@ function init() {
   tailToggle.addEventListener("click", toggleTail);
   themeToggle.addEventListener("click", toggleTheme);
   mapToggleBtn.addEventListener("click", toggleMap);
+  settingsToggleBtn.addEventListener("click", toggleSettings);
+  $("#settings-close").addEventListener("click", toggleSettings);
+  settingsOverlay.addEventListener("click", toggleSettings);
   setupMapResize();
 
   // Sortable column headers
