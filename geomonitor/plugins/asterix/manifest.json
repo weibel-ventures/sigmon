@@ -1,0 +1,53 @@
+{
+    "id": "asterix",
+    "name": "ASTERIX",
+    "version": "1.0.0",
+    "description": "EUROCONTROL ASTERIX surveillance data (Cat 034, 048, 062, 065, ...)",
+    "author": "Weibel Ventures",
+    "icon": "radar",
+    "color": "#FF2F00",
+    "api_version": 1,
+
+    "ingestor": {
+        "type": "udp",
+        "default_port": 23401
+    },
+
+    "list_columns": [
+        {
+            "key": "category",
+            "label": "Cat",
+            "width": 50,
+            "sortable": true
+        },
+        {
+            "key": "summary",
+            "label": "Summary",
+            "width": null,
+            "sortable": true
+        }
+    ],
+
+    "settings_schema": {
+        "type": "object",
+        "properties": {
+            "udp_port": {
+                "type": "integer",
+                "title": "UDP Port",
+                "default": 23401,
+                "minimum": 1,
+                "maximum": 65535
+            },
+            "multicast_group": {
+                "type": ["string", "null"],
+                "title": "Multicast Group",
+                "default": null,
+                "description": "Join this multicast group (e.g. 239.1.1.1). Leave empty for unicast."
+            }
+        }
+    },
+
+    "entity_types": ["track", "sensor"],
+    "map_layer": true,
+    "supports_hex_dump": true
+}

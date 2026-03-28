@@ -1,0 +1,1819 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ASTERIX Monitor</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="">
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap');
+
+/* Dark theme (default) — WV brand */
+:root, [data-theme="dark"] {
+  --bg: #3A4251;
+  --bg-secondary: #2f3640;
+  --bg-tertiary: #353d49;
+  --bg-hover: #434d5c;
+  --bg-selected: #4e5a6c;
+  --border: #556070;
+  --text: #e4e8ee;
+  --text-dim: #8a94a6;
+  --text-bright: #ffffff;
+  --accent: #0077FD;
+  --accent-dim: #B2CBE7;
+  --green: #34C759;
+  --yellow: #FF9F0A;
+  --red: #FF2F00;
+  --orange: #FF9F0A;
+  --pink: #FF375F;
+  --teal: #B2CBE7;
+  --mono: "SF Mono", "Cascadia Code", "Fira Code", Consolas, "Courier New", monospace;
+  --sans: 'Inter', 'Helvetica Neue', Arial, sans-serif;
+}
+
+/* Light theme — WV brand */
+[data-theme="light"] {
+  --bg: #f4f6f9;
+  --bg-secondary: #ffffff;
+  --bg-tertiary: #ebeef3;
+  --bg-hover: #dce1ea;
+  --bg-selected: #B2CBE7;
+  --border: #c4cdd9;
+  --text: #3A4251;
+  --text-dim: #6b7689;
+  --text-bright: #3A4251;
+  --accent: #0077FD;
+  --accent-dim: #024497;
+  --green: #34C759;
+  --yellow: #FF9F0A;
+  --red: #FF2F00;
+  --orange: #FF9F0A;
+  --pink: #FF375F;
+  --teal: #024497;
+}
+
+/* Follow system preference when no explicit theme is set */
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --bg: #f4f6f9;
+    --bg-secondary: #ffffff;
+    --bg-tertiary: #ebeef3;
+    --bg-hover: #dce1ea;
+    --bg-selected: #B2CBE7;
+    --border: #c4cdd9;
+    --text: #3A4251;
+    --text-dim: #6b7689;
+    --text-bright: #3A4251;
+    --accent: #0077FD;
+    --accent-dim: #024497;
+    --green: #34C759;
+    --yellow: #FF9F0A;
+    --red: #FF2F00;
+    --orange: #FF9F0A;
+    --pink: #FF375F;
+    --teal: #024497;
+  }
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 13px;
+  overflow: hidden;
+}
+
+/* Layout */
+#app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+/* Header */
+#header {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 8px 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+#wv-logo {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+#header h1 {
+  font-size: 15px;
+  font-weight: 500;
+  color: var(--text-bright);
+  white-space: nowrap;
+  letter-spacing: 0.3px;
+}
+
+.header-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
+  border: 1px solid transparent;
+}
+
+.header-btn:hover { border-color: var(--border); }
+
+.header-btn.active {
+  background: rgba(52, 199, 89, 0.15);
+  color: var(--green);
+}
+
+.header-btn.inactive {
+  background: rgba(255, 159, 10, 0.15);
+  color: var(--yellow);
+}
+
+.header-btn .dot {
+  width: 7px; height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.header-btn.active .dot { animation: pulse 1.5s ease-in-out infinite; }
+
+.header-btn .icon { font-size: 14px; line-height: 1; }
+
+.kbd-hint {
+  font-size: 10px;
+  color: var(--text-dim);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 4px;
+  margin-left: 2px;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
+
+#stats {
+  display: flex;
+  gap: 16px;
+  margin-left: auto;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+#stats span { white-space: nowrap; }
+#stats .val { color: var(--text); font-weight: 500; }
+
+/* Filter bar */
+#filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 16px;
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
+#filters label {
+  font-size: 11px;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+#filters select, #filters input {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 12px;
+  font-family: var(--mono);
+  outline: none;
+}
+
+#filters select:focus, #filters input:focus {
+  border-color: var(--accent);
+}
+
+#filters input[type="text"] { width: 180px; }
+#filters input[type="datetime-local"] { width: 170px; }
+
+.filter-group {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+#clear-filters {
+  background: transparent;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+#clear-filters:hover { color: var(--text); border-color: var(--text-dim); }
+
+/* Main content area — three panes */
+#content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+/* Message list (top pane) */
+#message-list-container {
+  flex: 1;
+  min-height: 120px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border-bottom: 2px solid var(--border);
+}
+
+#message-list-header {
+  display: grid;
+  grid-template-columns: 60px 100px 160px 50px 1fr 50px;
+  gap: 0;
+  padding: 4px 12px;
+  background: var(--bg-tertiary);
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-dim);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  flex-shrink: 0;
+}
+
+#message-list-header .col-header {
+  cursor: pointer;
+  user-select: none;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+#message-list-header .col-header:hover { color: var(--text); }
+#message-list-header .col-header.sorted { color: var(--accent); }
+
+.sort-arrow {
+  font-size: 9px;
+  opacity: 0;
+}
+
+.col-header:hover .sort-arrow { opacity: 0.4; }
+.col-header.sorted .sort-arrow { opacity: 1; }
+
+#message-list {
+  flex: 1;
+  overflow-y: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+}
+
+.msg-row {
+  display: grid;
+  grid-template-columns: 60px 100px 160px 50px 1fr 50px;
+  gap: 0;
+  padding: 2px 12px;
+  cursor: pointer;
+  border-bottom: 1px solid transparent;
+}
+
+.msg-row:hover { background: var(--bg-hover); }
+.msg-row.selected { background: var(--bg-selected); border-bottom-color: var(--border); }
+
+.msg-row .col-seq { color: var(--text-dim); }
+.msg-row .col-time { color: var(--teal); }
+.msg-row .col-ip { color: var(--text); }
+.msg-row .col-cat { color: var(--yellow); font-weight: 600; }
+.msg-row .col-summary { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg-row .col-size { color: var(--text-dim); text-align: right; }
+.msg-row.parse-error .col-summary { color: var(--red); }
+
+/* Detail panes (bottom) */
+#detail-panes {
+  height: 280px;
+  min-height: 100px;
+  display: flex;
+  flex-shrink: 0;
+}
+
+/* Resize handle */
+#resize-handle {
+  height: 4px;
+  background: var(--border);
+  cursor: ns-resize;
+  flex-shrink: 0;
+}
+
+#resize-handle:hover { background: var(--accent); }
+
+/* Decoded tree (left) */
+#decoded-tree {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 12px;
+  font-family: var(--mono);
+  font-size: 12px;
+  border-right: 1px solid var(--border);
+  background: var(--bg-secondary);
+}
+
+#decoded-tree .tree-empty {
+  color: var(--text-dim);
+  font-style: italic;
+  padding: 20px 0;
+}
+
+.tree-node { padding-left: 16px; }
+
+.tree-toggle {
+  cursor: pointer;
+  user-select: none;
+  padding: 1px 0;
+  display: flex;
+  align-items: baseline;
+  gap: 4px;
+}
+
+.tree-toggle:hover { color: var(--accent); }
+
+.tree-arrow {
+  display: inline-block;
+  width: 12px;
+  font-size: 10px;
+  color: var(--text-dim);
+  flex-shrink: 0;
+}
+
+.tree-key { color: var(--accent); }
+.tree-desc { color: var(--text-dim); font-size: 11px; }
+.tree-val { color: var(--green); }
+.tree-meaning { color: var(--orange); font-size: 11px; }
+.tree-category-label { color: var(--yellow); font-weight: 600; }
+.tree-error { color: var(--red); }
+
+.tree-children { display: none; }
+.tree-children.open { display: block; }
+
+.tree-leaf {
+  padding: 1px 0 1px 16px;
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+/* Hex dump (right) */
+#hex-dump {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 12px;
+  font-family: var(--mono);
+  font-size: 12px;
+  background: var(--bg-secondary);
+  white-space: pre;
+  line-height: 1.5;
+}
+
+#hex-dump .hex-empty {
+  color: var(--text-dim);
+  font-style: italic;
+}
+
+.hex-offset { color: var(--text-dim); }
+.hex-byte { color: var(--text); }
+.hex-ascii { color: var(--teal); }
+.hex-separator { color: var(--border); }
+
+/* Connection status overlay */
+#connection-status {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 24px 32px;
+  text-align: center;
+  z-index: 100;
+  display: none;
+}
+
+#connection-status.visible { display: block; }
+#connection-status h2 { font-size: 16px; margin-bottom: 8px; }
+#connection-status p { color: var(--text-dim); font-size: 13px; }
+
+/* Map panel */
+#map-container {
+  display: none;
+  height: 40vh;
+  min-height: 200px;
+  border-bottom: 2px solid var(--border);
+  flex-shrink: 0;
+  position: relative;
+}
+
+#map-container.visible { display: block; }
+
+#map {
+  width: 100%;
+  height: 100%;
+}
+
+/* Override Leaflet for dark theme */
+.leaflet-container { background: var(--bg); }
+
+#map-resize-handle {
+  height: 4px;
+  background: var(--border);
+  cursor: ns-resize;
+  flex-shrink: 0;
+  display: none;
+}
+
+#map-resize-handle.visible { display: block; }
+
+/* Map legend */
+#map-legend {
+  position: absolute;
+  bottom: 10px;
+  left: 10px;
+  z-index: 1000;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px 12px;
+  font-size: 11px;
+  color: var(--text);
+  max-width: 200px;
+}
+
+#map-legend .legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+#map-legend .legend-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+#map-legend .legend-line {
+  width: 16px;
+  height: 3px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track { background: var(--bg); }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--text-dim); }
+</style>
+</head>
+<body>
+<div id="app">
+  <!-- Header -->
+  <div id="header">
+    <svg id="wv-logo" width="32" height="18" viewBox="0 0 313 177" xmlns="http://www.w3.org/2000/svg"><g stroke="none" fill="none" fill-rule="evenodd"><polygon fill="currentColor" points="171 0 213 0 242 103 271 0 313 0 263 177 221 177"/><path d="M0,0 L50,177 C78,177 92,177 92,177 L121,74 L150,177 L192,177 L142,0 L100,0 L71.0033337,103 L42,0 L0,0 Z" fill="currentColor"/></g></svg>
+    <h1>ASTERIX Monitor</h1>
+    <div class="header-btn active" id="play-toggle" title="Pause/resume incoming messages (Space)">
+      <span class="dot"></span>
+      <span class="icon" id="play-icon">&#9654;</span>
+      <span id="play-label">Live</span>
+    </div>
+    <div class="header-btn active" id="tail-toggle" title="Auto-scroll to latest messages">
+      <span class="icon" id="tail-icon">&#8615;</span>
+      <span id="tail-label">Tail</span>
+    </div>
+    <div class="header-btn" id="map-toggle" title="Toggle map view (M)">
+      <span class="icon" id="map-icon">&#9678;</span>
+      <span>Map</span>
+    </div>
+    <div class="header-btn" id="theme-toggle" title="Toggle dark/light theme">
+      <span class="icon" id="theme-icon">&#9790;</span>
+    </div>
+    <div id="stats">
+      <span>Rate: <span class="val" id="stat-rate">0</span>/s</span>
+      <span>Buffer: <span class="val" id="stat-buffer">0</span></span>
+      <span>Clients: <span class="val" id="stat-clients">0</span></span>
+      <span>UDP: <span class="val" id="stat-port">-</span></span>
+    </div>
+  </div>
+
+  <!-- Filter bar -->
+  <div id="filters">
+    <div class="filter-group">
+      <label>Cat</label>
+      <select id="filter-cat"><option value="">All</option></select>
+    </div>
+    <div class="filter-group">
+      <label>Source</label>
+      <select id="filter-ip"><option value="">All</option></select>
+    </div>
+    <div class="filter-group">
+      <label>From</label>
+      <input type="datetime-local" id="filter-from" step="1">
+    </div>
+    <div class="filter-group">
+      <label>To</label>
+      <input type="datetime-local" id="filter-to" step="1">
+    </div>
+    <div class="filter-group">
+      <label>Search</label>
+      <input type="text" id="filter-search" placeholder="text or hex...">
+    </div>
+    <button id="clear-filters">Clear</button>
+  </div>
+
+  <!-- Main content -->
+  <div id="content">
+    <!-- Map -->
+    <div id="map-container">
+      <div id="map"></div>
+    </div>
+    <div id="map-resize-handle"></div>
+    <!-- Message list -->
+    <div id="message-list-container">
+      <div id="message-list-header">
+        <div class="col-header sorted" data-sort="seq">#<span class="sort-arrow">&#9650;</span></div>
+        <div class="col-header" data-sort="ts">Time<span class="sort-arrow">&#9650;</span></div>
+        <div class="col-header" data-sort="src_ip">Source<span class="sort-arrow">&#9650;</span></div>
+        <div class="col-header" data-sort="cat">Cat<span class="sort-arrow">&#9650;</span></div>
+        <div class="col-header" data-sort="summary">Summary<span class="sort-arrow">&#9650;</span></div>
+        <div class="col-header" data-sort="size" style="text-align:right">Size<span class="sort-arrow">&#9650;</span></div>
+      </div>
+      <div id="message-list"></div>
+    </div>
+
+    <!-- Resize handle -->
+    <div id="resize-handle"></div>
+
+    <!-- Detail panes -->
+    <div id="detail-panes">
+      <div id="decoded-tree"><div class="tree-empty">Select a message to view decoded fields</div></div>
+      <div id="hex-dump"><span class="hex-empty">Select a message to view hex dump</span></div>
+    </div>
+  </div>
+</div>
+
+<!-- Connection overlay -->
+<div id="connection-status">
+  <h2>Connecting...</h2>
+  <p>Establishing WebSocket connection to server</p>
+</div>
+
+<script>
+(function() {
+"use strict";
+
+// -----------------------------------------------------------------------
+// State
+// -----------------------------------------------------------------------
+const state = {
+  messages: [],          // all received AsterixEntry dicts
+  filtered: [],          // indices into messages matching current filters
+  selectedSeq: null,     // seq of selected message
+  paused: false,
+  autoScroll: true,
+  ws: null,
+  reconnectTimer: null,
+  seenCats: new Set(),
+  seenIPs: new Set(),
+  statsInterval: null,
+  sortCol: "seq",        // current sort column
+  sortAsc: true,         // sort direction
+};
+
+// -----------------------------------------------------------------------
+// DOM refs
+// -----------------------------------------------------------------------
+const $ = (sel) => document.querySelector(sel);
+const msgList = $("#message-list");
+const decodedTree = $("#decoded-tree");
+const hexDump = $("#hex-dump");
+const playToggle = $("#play-toggle");
+const playLabel = $("#play-label");
+const playIcon = $("#play-icon");
+const tailToggle = $("#tail-toggle");
+const tailLabel = $("#tail-label");
+const filterCat = $("#filter-cat");
+const filterIP = $("#filter-ip");
+const filterFrom = $("#filter-from");
+const filterTo = $("#filter-to");
+const filterSearch = $("#filter-search");
+const clearFilters = $("#clear-filters");
+const connStatus = $("#connection-status");
+
+// -----------------------------------------------------------------------
+// URL hash state
+// -----------------------------------------------------------------------
+function readHash() {
+  const h = window.location.hash.substring(1);
+  const params = new URLSearchParams(h);
+  if (params.get("cat")) filterCat.value = params.get("cat");
+  if (params.get("ip")) filterIP.value = params.get("ip");
+  if (params.get("from")) filterFrom.value = params.get("from");
+  if (params.get("to")) filterTo.value = params.get("to");
+  if (params.get("q")) filterSearch.value = params.get("q");
+}
+
+function writeHash() {
+  const params = new URLSearchParams();
+  if (filterCat.value) params.set("cat", filterCat.value);
+  if (filterIP.value) params.set("ip", filterIP.value);
+  if (filterFrom.value) params.set("from", filterFrom.value);
+  if (filterTo.value) params.set("to", filterTo.value);
+  if (filterSearch.value) params.set("q", filterSearch.value);
+  const h = params.toString();
+  history.replaceState(null, "", h ? "#" + h : window.location.pathname);
+}
+
+// -----------------------------------------------------------------------
+// Message summary
+// -----------------------------------------------------------------------
+function messageSummary(msg) {
+  if (msg.parse_error) return "PARSE ERROR: " + msg.parse_error;
+  if (!msg.parsed || msg.parsed.length === 0) return "(empty)";
+
+  const parts = [];
+  for (const block of msg.parsed) {
+    const cat = block.category || "?";
+    let info = "Cat " + cat;
+
+    // Cat 48 — try target ID or track number
+    if (block.I240 && block.I240.TId) info += " " + block.I240.TId.val.trim();
+    else if (block.I161 && block.I161.Tn) info += " Trk#" + block.I161.Tn.val;
+    else if (block.I220 && block.I220.ACAddr) info += " " + block.I220.ACAddr.val;
+
+    // Cat 34 — message type
+    if (block.I000 && block.I000.MsgTyp) {
+      const mt = block.I000.MsgTyp;
+      info += " " + (mt.meaning || "Type " + mt.val);
+    }
+
+    parts.push(info);
+  }
+  return parts.join(" | ");
+}
+
+function messageCategories(msg) {
+  if (!msg.parsed) return [];
+  return msg.parsed.map(b => b.category).filter(c => c != null);
+}
+
+// -----------------------------------------------------------------------
+// Filtering
+// -----------------------------------------------------------------------
+function matchesFilter(msg) {
+  // Category filter
+  const catVal = filterCat.value;
+  if (catVal) {
+    const cats = messageCategories(msg);
+    if (!cats.includes(parseInt(catVal))) return false;
+  }
+
+  // IP filter
+  const ipVal = filterIP.value;
+  if (ipVal && msg.src_ip !== ipVal) return false;
+
+  // Time range
+  const fromVal = filterFrom.value;
+  if (fromVal) {
+    const fromTs = new Date(fromVal).getTime() / 1000;
+    if (msg.ts < fromTs) return false;
+  }
+  const toVal = filterTo.value;
+  if (toVal) {
+    const toTs = new Date(toVal).getTime() / 1000;
+    if (msg.ts > toTs) return false;
+  }
+
+  // Text search (searches summary and raw hex)
+  const q = filterSearch.value.toLowerCase();
+  if (q) {
+    const summary = messageSummary(msg).toLowerCase();
+    const hex = msg.raw_hex.toLowerCase();
+    const ip = msg.src_ip;
+    if (!summary.includes(q) && !hex.includes(q) && !ip.includes(q)) return false;
+  }
+
+  return true;
+}
+
+function rebuildFiltered() {
+  state.filtered = [];
+  for (let i = 0; i < state.messages.length; i++) {
+    if (matchesFilter(state.messages[i])) {
+      state.filtered.push(i);
+    }
+  }
+  applySorting();
+}
+
+// -----------------------------------------------------------------------
+// Sorting
+// -----------------------------------------------------------------------
+function getSortValue(msg, col) {
+  switch (col) {
+    case "seq": return msg.seq;
+    case "ts": return msg.ts;
+    case "src_ip": return msg.src_ip + ":" + msg.src_port;
+    case "cat": {
+      const cats = messageCategories(msg);
+      return cats.length > 0 ? cats[0] : 0;
+    }
+    case "summary": return messageSummary(msg);
+    case "size": return msg.size;
+    default: return msg.seq;
+  }
+}
+
+function applySorting() {
+  const col = state.sortCol;
+  const asc = state.sortAsc;
+
+  state.filtered.sort((ai, bi) => {
+    const a = getSortValue(state.messages[ai], col);
+    const b = getSortValue(state.messages[bi], col);
+    let cmp;
+    if (typeof a === "string" && typeof b === "string") {
+      cmp = a.localeCompare(b);
+    } else {
+      cmp = (a < b) ? -1 : (a > b) ? 1 : 0;
+    }
+    return asc ? cmp : -cmp;
+  });
+}
+
+function setSort(col) {
+  if (state.sortCol === col) {
+    state.sortAsc = !state.sortAsc;
+  } else {
+    state.sortCol = col;
+    state.sortAsc = true;
+  }
+  updateSortHeaders();
+  rebuildFiltered();
+  renderFullList();
+}
+
+function updateSortHeaders() {
+  document.querySelectorAll("#message-list-header .col-header").forEach(el => {
+    const col = el.dataset.sort;
+    const arrow = el.querySelector(".sort-arrow");
+    if (col === state.sortCol) {
+      el.classList.add("sorted");
+      arrow.innerHTML = state.sortAsc ? "&#9650;" : "&#9660;";
+    } else {
+      el.classList.remove("sorted");
+      arrow.innerHTML = "&#9650;";
+    }
+  });
+}
+
+// -----------------------------------------------------------------------
+// Rendering — message list
+// -----------------------------------------------------------------------
+function formatTime(ts) {
+  const d = new Date(ts * 1000);
+  return d.toLocaleTimeString("en-GB", { hour12: false }) +
+    "." + String(d.getMilliseconds()).padStart(3, "0");
+}
+
+function createMsgRow(msg) {
+  const row = document.createElement("div");
+  row.className = "msg-row" + (msg.parse_error ? " parse-error" : "");
+  row.dataset.seq = msg.seq;
+
+  const cats = messageCategories(msg);
+  const catStr = cats.length > 0 ? cats.join(",") : "?";
+  const summary = messageSummary(msg);
+
+  row.innerHTML =
+    '<div class="col-seq">' + msg.seq + '</div>' +
+    '<div class="col-time">' + formatTime(msg.ts) + '</div>' +
+    '<div class="col-ip">' + msg.src_ip + ':' + msg.src_port + '</div>' +
+    '<div class="col-cat">' + catStr + '</div>' +
+    '<div class="col-summary" title="' + escapeHtml(summary) + '">' + escapeHtml(summary) + '</div>' +
+    '<div class="col-size">' + msg.size + '</div>';
+
+  row.addEventListener("click", () => selectMessage(msg.seq));
+  return row;
+}
+
+function renderFullList() {
+  msgList.innerHTML = "";
+  const frag = document.createDocumentFragment();
+  for (const idx of state.filtered) {
+    frag.appendChild(createMsgRow(state.messages[idx]));
+  }
+  msgList.appendChild(frag);
+  if (state.autoScroll && !state.paused) {
+    tailSnap();
+  }
+}
+
+function appendToList(msg) {
+  if (!matchesFilter(msg)) return;
+  state.filtered.push(state.messages.length - 1);
+
+  if (state.paused) return; // buffered, will render on unpause
+
+  // When tail is on we need sorted position; re-sort and re-render
+  // for non-seq sorts, since new message may not belong at the end
+  if (state.sortCol !== "seq" || !state.sortAsc) {
+    applySorting();
+    renderFullListNoTail();
+    tailSnap();
+    return;
+  }
+
+  // Default case: seq ascending — just append
+  msgList.appendChild(createMsgRow(msg));
+
+  if (state.autoScroll) {
+    tailSnap();
+  }
+}
+
+// Render without triggering tail (used by appendToList to avoid recursion)
+function renderFullListNoTail() {
+  msgList.innerHTML = "";
+  const frag = document.createDocumentFragment();
+  for (const idx of state.filtered) {
+    frag.appendChild(createMsgRow(state.messages[idx]));
+  }
+  msgList.appendChild(frag);
+}
+
+// Tail snap: select the latest message and scroll it into view
+function tailSnap() {
+  if (!state.autoScroll) return;
+
+  // The "latest" message is the last one in the sorted list
+  // In ascending sort, latest is at the bottom; in descending, at the top
+  const rows = msgList.querySelectorAll(".msg-row");
+  if (rows.length === 0) return;
+
+  const targetRow = state.sortAsc ? rows[rows.length - 1] : rows[0];
+  const seq = parseInt(targetRow.dataset.seq);
+
+  // Select it (updates detail panes)
+  selectMessage(seq);
+
+  // Scroll: ascending → bottom, descending → top
+  if (state.sortAsc) {
+    msgList.scrollTop = msgList.scrollHeight;
+  } else {
+    msgList.scrollTop = 0;
+  }
+}
+
+// -----------------------------------------------------------------------
+// Rendering — decoded tree
+// -----------------------------------------------------------------------
+function renderDecodedTree(msg) {
+  if (!msg) {
+    decodedTree.innerHTML = '<div class="tree-empty">Select a message to view decoded fields</div>';
+    return;
+  }
+
+  if (msg.parse_error) {
+    decodedTree.innerHTML = '<div class="tree-error">Parse error: ' + escapeHtml(msg.parse_error) + '</div>';
+    return;
+  }
+
+  if (!msg.parsed || msg.parsed.length === 0) {
+    decodedTree.innerHTML = '<div class="tree-empty">No decoded data</div>';
+    return;
+  }
+
+  let html = "";
+  for (const block of msg.parsed) {
+    html += renderBlock(block);
+  }
+  decodedTree.innerHTML = html;
+
+  // Add click handlers for toggles
+  decodedTree.querySelectorAll(".tree-toggle").forEach(el => {
+    el.addEventListener("click", () => {
+      const children = el.nextElementSibling;
+      if (children && children.classList.contains("tree-children")) {
+        children.classList.toggle("open");
+        const arrow = el.querySelector(".tree-arrow");
+        arrow.textContent = children.classList.contains("open") ? "\u25BC" : "\u25B6";
+      }
+    });
+  });
+}
+
+function renderBlock(block) {
+  const cat = block.category || "?";
+  const catNames = {
+    1: "Monoradar Target Reports (Plot)",
+    2: "Monoradar Service Messages",
+    8: "Monoradar Derived Weather",
+    10: "Monosensor Surface Movement Data",
+    19: "Multilateration System Status",
+    20: "Multilateration Target Reports",
+    21: "ADS-B Target Reports",
+    23: "CNS/ATM Ground Station Service",
+    30: "Network Layer Comm",
+    34: "Monoradar Service Messages",
+    48: "Monoradar Target Reports",
+    62: "SDPS Track Messages",
+    63: "Sensor Status Messages",
+    65: "SDPS Service Status Messages",
+  };
+  const catName = catNames[cat] || "Category " + cat;
+
+  let html = '<div class="tree-node">';
+  html += '<div class="tree-toggle">';
+  html += '<span class="tree-arrow">\u25BC</span>';
+  html += '<span class="tree-category-label">Category ' + cat + '</span>';
+  html += ' <span class="tree-desc">\u2014 ' + escapeHtml(catName) + '</span>';
+  if (block.len) html += ' <span class="tree-desc">(' + block.len + ' bytes)</span>';
+  html += '</div>';
+  html += '<div class="tree-children open">';
+
+  // Render each I### data item
+  const dataItems = Object.keys(block)
+    .filter(k => k.startsWith("I"))
+    .sort();
+
+  for (const itemKey of dataItems) {
+    const item = block[itemKey];
+    html += renderDataItem(itemKey, item);
+  }
+
+  html += '</div></div>';
+  return html;
+}
+
+const DATA_ITEM_NAMES = {
+  "I000": "Message Type",
+  "I010": "Data Source Identifier",
+  "I020": "Target Report Descriptor",
+  "I030": "Warning/Error Conditions",
+  "I040": "Measured Position (Polar)",
+  "I042": "Calculated Position (Cartesian)",
+  "I050": "System Configuration & Status",
+  "I060": "System Processing Mode",
+  "I070": "Mode-3/A Code",
+  "I080": "Mode-3/A Code Confidence",
+  "I090": "Flight Level",
+  "I100": "Mode-C Code",
+  "I110": "3D Height",
+  "I120": "Radial Doppler Speed",
+  "I130": "Radar Plot Characteristics",
+  "I140": "Time of Day",
+  "I161": "Track Number",
+  "I170": "Track Status",
+  "I200": "Calculated Track Velocity",
+  "I210": "Track Quality",
+  "I220": "Aircraft Address",
+  "I230": "Communications / ACAS",
+  "I240": "Aircraft Identification",
+  "I250": "Mode S MB Data",
+};
+
+function renderDataItem(key, item) {
+  const name = DATA_ITEM_NAMES[key] || "";
+
+  // If item is an array (e.g., I250 or I030), render each element
+  if (Array.isArray(item)) {
+    let html = '<div class="tree-node">';
+    html += '<div class="tree-toggle">';
+    html += '<span class="tree-arrow">\u25B6</span>';
+    html += '<span class="tree-key">' + key + '</span>';
+    if (name) html += ' <span class="tree-desc">\u2014 ' + escapeHtml(name) + '</span>';
+    html += ' <span class="tree-desc">[' + item.length + ' items]</span>';
+    html += '</div>';
+    html += '<div class="tree-children">';
+    for (let i = 0; i < item.length; i++) {
+      html += renderDataItem(key + "[" + i + "]", item[i]);
+    }
+    html += '</div></div>';
+    return html;
+  }
+
+  // Object with sub-fields
+  if (typeof item === "object" && item !== null) {
+    const subKeys = Object.keys(item);
+    // Check if it's a leaf (has 'val' directly)
+    if (subKeys.includes("val") && subKeys.length <= 4) {
+      return renderLeaf(key, name, item);
+    }
+
+    // It's a branch with sub-fields
+    let html = '<div class="tree-node">';
+    html += '<div class="tree-toggle">';
+    html += '<span class="tree-arrow">\u25B6</span>';
+    html += '<span class="tree-key">' + key + '</span>';
+    if (name) html += ' <span class="tree-desc">\u2014 ' + escapeHtml(name) + '</span>';
+    html += '</div>';
+    html += '<div class="tree-children">';
+    for (const sk of subKeys) {
+      if (typeof item[sk] === "object" && item[sk] !== null) {
+        html += renderLeaf(sk, "", item[sk]);
+      } else {
+        html += '<div class="tree-leaf">';
+        html += '<span class="tree-key">' + sk + '</span>';
+        html += '<span class="tree-val">' + escapeHtml(String(item[sk])) + '</span>';
+        html += '</div>';
+      }
+    }
+    html += '</div></div>';
+    return html;
+  }
+
+  // Primitive
+  return '<div class="tree-leaf"><span class="tree-key">' + key + '</span>' +
+    '<span class="tree-val">' + escapeHtml(String(item)) + '</span></div>';
+}
+
+function renderLeaf(key, parentName, field) {
+  let html = '<div class="tree-leaf">';
+  html += '<span class="tree-key">' + key + '</span>';
+
+  if (field.desc) html += ' <span class="tree-desc">(' + escapeHtml(field.desc) + ')</span>';
+  if (field.val !== undefined) html += ' <span class="tree-val">' + escapeHtml(String(field.val)) + '</span>';
+  if (field.meaning) html += ' <span class="tree-meaning">' + escapeHtml(field.meaning) + '</span>';
+  if (field.max !== undefined) html += ' <span class="tree-desc">[max: ' + field.max + ']</span>';
+
+  html += '</div>';
+  return html;
+}
+
+// -----------------------------------------------------------------------
+// Rendering — hex dump
+// -----------------------------------------------------------------------
+function renderHexDump(msg) {
+  if (!msg) {
+    hexDump.innerHTML = '<span class="hex-empty">Select a message to view hex dump</span>';
+    return;
+  }
+
+  const hex = msg.raw_hex;
+  const bytes = [];
+  for (let i = 0; i < hex.length; i += 2) {
+    bytes.push(parseInt(hex.substr(i, 2), 16));
+  }
+
+  let html = "";
+  for (let i = 0; i < bytes.length; i += 16) {
+    const chunk = bytes.slice(i, i + 16);
+
+    // Offset
+    html += '<span class="hex-offset">' + i.toString(16).padStart(8, "0") + "</span>  ";
+
+    // Hex bytes
+    let hexPart = "";
+    for (let j = 0; j < 16; j++) {
+      if (j < chunk.length) {
+        hexPart += '<span class="hex-byte">' + chunk[j].toString(16).padStart(2, "0") + "</span> ";
+      } else {
+        hexPart += "   ";
+      }
+      if (j === 7) hexPart += '<span class="hex-separator">\u2502</span> ';
+    }
+    html += hexPart;
+
+    // ASCII
+    html += '<span class="hex-separator">\u2502</span> <span class="hex-ascii">';
+    for (let j = 0; j < chunk.length; j++) {
+      const c = chunk[j];
+      html += (c >= 32 && c < 127) ? escapeHtml(String.fromCharCode(c)) : ".";
+    }
+    html += "</span>\n";
+  }
+
+  hexDump.innerHTML = html;
+}
+
+// -----------------------------------------------------------------------
+// Selection
+// -----------------------------------------------------------------------
+function selectMessage(seq) {
+  state.selectedSeq = seq;
+
+  // Update row highlight
+  msgList.querySelectorAll(".msg-row.selected").forEach(r => r.classList.remove("selected"));
+  const row = msgList.querySelector('.msg-row[data-seq="' + seq + '"]');
+  if (row) {
+    row.classList.add("selected");
+    // Scroll row into view if needed
+    const listRect = msgList.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    if (rowRect.top < listRect.top) {
+      row.scrollIntoView({ block: "nearest" });
+    } else if (rowRect.bottom > listRect.bottom) {
+      row.scrollIntoView({ block: "nearest" });
+    }
+  }
+
+  // Find message
+  const msg = state.messages.find(m => m.seq === seq);
+  renderDecodedTree(msg);
+  renderHexDump(msg);
+}
+
+// Get the seq of the currently visible row above/below selection
+function getAdjacentSeq(direction) {
+  const rows = msgList.querySelectorAll(".msg-row");
+  if (rows.length === 0) return null;
+
+  if (state.selectedSeq === null) {
+    // Nothing selected — pick first or last
+    return parseInt(direction > 0 ? rows[0].dataset.seq : rows[rows.length - 1].dataset.seq);
+  }
+
+  for (let i = 0; i < rows.length; i++) {
+    if (parseInt(rows[i].dataset.seq) === state.selectedSeq) {
+      const next = i + direction;
+      if (next >= 0 && next < rows.length) {
+        return parseInt(rows[next].dataset.seq);
+      }
+      return null; // already at boundary
+    }
+  }
+  return null;
+}
+
+// -----------------------------------------------------------------------
+// Keyboard navigation
+// -----------------------------------------------------------------------
+function handleKeyDown(e) {
+  // Don't capture keys when focus is in an input/select
+  const tag = document.activeElement.tagName;
+  if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+
+  switch (e.key) {
+    case "ArrowUp": {
+      e.preventDefault();
+      const seq = getAdjacentSeq(-1);
+      if (seq !== null) selectMessage(seq);
+      break;
+    }
+    case "ArrowDown": {
+      e.preventDefault();
+      const seq = getAdjacentSeq(1);
+      if (seq !== null) selectMessage(seq);
+      break;
+    }
+    case "ArrowRight": {
+      // Expand all tree nodes in the decoded tree
+      e.preventDefault();
+      decodedTree.querySelectorAll(".tree-children").forEach(el => {
+        el.classList.add("open");
+      });
+      decodedTree.querySelectorAll(".tree-arrow").forEach(el => {
+        el.textContent = "\u25BC";
+      });
+      break;
+    }
+    case "ArrowLeft": {
+      // Collapse all tree nodes in the decoded tree
+      e.preventDefault();
+      decodedTree.querySelectorAll(".tree-children").forEach(el => {
+        el.classList.remove("open");
+      });
+      decodedTree.querySelectorAll(".tree-arrow").forEach(el => {
+        el.textContent = "\u25B6";
+      });
+      break;
+    }
+    case " ": {
+      // Space toggles pause
+      e.preventDefault();
+      togglePause();
+      break;
+    }
+    case "m":
+    case "M": {
+      e.preventDefault();
+      toggleMap();
+      break;
+    }
+  }
+}
+
+// -----------------------------------------------------------------------
+// Filter updates
+// -----------------------------------------------------------------------
+function updateFilterDropdowns(msg) {
+  let catsChanged = false;
+  let ipsChanged = false;
+
+  for (const cat of messageCategories(msg)) {
+    if (!state.seenCats.has(cat)) {
+      state.seenCats.add(cat);
+      catsChanged = true;
+    }
+  }
+  if (!state.seenIPs.has(msg.src_ip)) {
+    state.seenIPs.add(msg.src_ip);
+    ipsChanged = true;
+  }
+
+  if (catsChanged) {
+    const current = filterCat.value;
+    const sorted = [...state.seenCats].sort((a, b) => a - b);
+    filterCat.innerHTML = '<option value="">All</option>';
+    for (const c of sorted) {
+      const opt = document.createElement("option");
+      opt.value = c;
+      opt.textContent = "Cat " + c;
+      filterCat.appendChild(opt);
+    }
+    filterCat.value = current;
+  }
+
+  if (ipsChanged) {
+    const current = filterIP.value;
+    const sorted = [...state.seenIPs].sort();
+    filterIP.innerHTML = '<option value="">All</option>';
+    for (const ip of sorted) {
+      const opt = document.createElement("option");
+      opt.value = ip;
+      opt.textContent = ip;
+      filterIP.appendChild(opt);
+    }
+    filterIP.value = current;
+  }
+}
+
+function onFilterChange() {
+  writeHash();
+  rebuildFiltered();
+  renderFullList();
+  rebuildMap();
+}
+
+// -----------------------------------------------------------------------
+// Play / Pause — controls whether new messages are rendered
+// -----------------------------------------------------------------------
+function togglePause() {
+  state.paused = !state.paused;
+  updatePlayButton();
+  if (!state.paused) {
+    // Catch up: re-render to show messages that arrived while paused
+    rebuildFiltered();
+    renderFullList();
+  }
+}
+
+function updatePlayButton() {
+  if (state.paused) {
+    playToggle.className = "header-btn inactive";
+    playLabel.textContent = "Paused";
+    playIcon.innerHTML = "&#9646;&#9646;"; // pause icon
+  } else {
+    playToggle.className = "header-btn active";
+    playLabel.textContent = "Live";
+    playIcon.innerHTML = "&#9654;"; // play icon
+  }
+}
+
+// -----------------------------------------------------------------------
+// Tail / Follow — controls auto-scroll to bottom
+// -----------------------------------------------------------------------
+function toggleTail() {
+  state.autoScroll = !state.autoScroll;
+  updateTailButton();
+  if (state.autoScroll) {
+    tailSnap();
+  }
+}
+
+function updateTailButton() {
+  if (state.autoScroll) {
+    tailToggle.className = "header-btn active";
+    tailLabel.textContent = "Tail";
+  } else {
+    tailToggle.className = "header-btn inactive";
+    tailLabel.textContent = "Tail Off";
+  }
+}
+
+// -----------------------------------------------------------------------
+// Stats polling
+// -----------------------------------------------------------------------
+async function pollStats() {
+  try {
+    const resp = await fetch("/api/stats");
+    const data = await resp.json();
+    $("#stat-rate").textContent = data.messages_per_sec;
+    $("#stat-buffer").textContent = data.buffer_size;
+    $("#stat-clients").textContent = data.connected_clients;
+    $("#stat-port").textContent = data.udp_port;
+  } catch (e) { /* ignore */ }
+}
+
+// -----------------------------------------------------------------------
+// WebSocket
+// -----------------------------------------------------------------------
+function connectWS() {
+  const proto = location.protocol === "https:" ? "wss:" : "ws:";
+  const url = proto + "//" + location.host + "/ws";
+
+  connStatus.classList.add("visible");
+
+  const ws = new WebSocket(url);
+  state.ws = ws;
+
+  ws.onopen = () => {
+    connStatus.classList.remove("visible");
+    console.log("WebSocket connected");
+  };
+
+  ws.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+
+    if (data.type === "snapshot") {
+      state.messages = data.messages;
+      // Populate filter dropdowns from all messages
+      for (const msg of state.messages) {
+        updateFilterDropdowns(msg);
+      }
+      rebuildFiltered();
+      renderFullList();
+      rebuildMap();
+    } else if (data.type === "new") {
+      for (const msg of data.messages) {
+        state.messages.push(msg);
+        updateFilterDropdowns(msg);
+        appendToList(msg);
+      }
+      // Debounce map updates for live data (rebuild at most every 2s)
+      scheduleMapUpdate();
+    }
+  };
+
+  ws.onclose = () => {
+    console.log("WebSocket closed, reconnecting in 2s...");
+    connStatus.querySelector("h2").textContent = "Reconnecting...";
+    connStatus.querySelector("p").textContent = "WebSocket connection lost. Retrying...";
+    connStatus.classList.add("visible");
+    state.reconnectTimer = setTimeout(connectWS, 2000);
+  };
+
+  ws.onerror = (err) => {
+    console.error("WebSocket error:", err);
+    ws.close();
+  };
+}
+
+// -----------------------------------------------------------------------
+// Resize handle
+// -----------------------------------------------------------------------
+function setupResize() {
+  const handle = $("#resize-handle");
+  const detailPanes = $("#detail-panes");
+  let startY, startHeight;
+
+  handle.addEventListener("mousedown", (e) => {
+    startY = e.clientY;
+    startHeight = detailPanes.offsetHeight;
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+    e.preventDefault();
+  });
+
+  function onMouseMove(e) {
+    const delta = startY - e.clientY;
+    const newHeight = Math.max(80, Math.min(window.innerHeight * 0.7, startHeight + delta));
+    detailPanes.style.height = newHeight + "px";
+  }
+
+  function onMouseUp() {
+    document.removeEventListener("mousemove", onMouseMove);
+    document.removeEventListener("mouseup", onMouseUp);
+  }
+}
+
+// -----------------------------------------------------------------------
+// Utility
+// -----------------------------------------------------------------------
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+// -----------------------------------------------------------------------
+// Map
+// -----------------------------------------------------------------------
+const mapContainer = $("#map-container");
+const mapResizeHandle = $("#map-resize-handle");
+const mapToggleBtn = $("#map-toggle");
+let leafletMap = null;
+let mapTileLayer = null;
+let mapSensorMarkers = {};   // key: "SAC:SIC" → marker
+let mapTrackLayers = {};     // key: trackNum → { polyline, marker }
+let mapSensorPositions = {}; // key: "SAC:SIC" → { lat, lon, height }
+
+const TILE_URLS = {
+  dark: "https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png",
+  light: "https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+};
+const TILE_ATTR = '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>';
+
+// Track colors — deterministic by track number
+// WV brand data viz colors: Red-Orange, Blue, Green, Orange, Pink, Dark Blue
+const TRACK_COLORS = [
+  "#FF2F00", "#0077FD", "#34C759", "#FF9F0A", "#FF375F", "#024497",
+  "#FF6B3D", "#3399FF", "#5DD97B", "#FFB83D", "#FF6B8A", "#336BB5",
+];
+
+function trackColor(tn) {
+  return TRACK_COLORS[tn % TRACK_COLORS.length];
+}
+
+function initMap() {
+  if (leafletMap) return;
+  leafletMap = L.map("map", {
+    center: [55.0, 10.0],  // default: Denmark
+    zoom: 6,
+    zoomControl: true,
+  });
+  const theme = getEffectiveTheme();
+  mapTileLayer = L.tileLayer(TILE_URLS[theme], {
+    attribution: TILE_ATTR,
+    maxZoom: 19,
+  }).addTo(leafletMap);
+}
+
+function updateMapTheme() {
+  if (!leafletMap || !mapTileLayer) return;
+  const theme = getEffectiveTheme();
+  mapTileLayer.setUrl(TILE_URLS[theme]);
+}
+
+// Convert polar (range NM, azimuth deg) relative to sensor → lat/lon
+function polarToLatLon(sensorLat, sensorLon, rhoNM, thetaDeg) {
+  const rangeM = rhoNM * 1852.0;
+  const azRad = thetaDeg * Math.PI / 180.0;
+  const latRad = sensorLat * Math.PI / 180.0;
+  // Flat-earth approximation — good for < 200km
+  const dLat = (rangeM * Math.cos(azRad)) / 111320.0;
+  const dLon = (rangeM * Math.sin(azRad)) / (111320.0 * Math.cos(latRad));
+  return [sensorLat + dLat, sensorLon + dLon];
+}
+
+// Extract sensor positions from Cat 34 messages
+function extractSensorPosition(block) {
+  if (block.category !== 34) return null;
+  if (!block.I120 || !block.I120.LAT || !block.I120.Lon) return null;
+  const sac = block.I010 ? block.I010.SAC.val : 0;
+  const sic = block.I010 ? block.I010.SIC.val : 0;
+  return {
+    key: sac + ":" + sic,
+    lat: block.I120.LAT.val,
+    lon: block.I120.Lon.val,
+    height: block.I120.Height ? block.I120.Height.val : 0,
+    sac: sac,
+    sic: sic,
+  };
+}
+
+// Extract track position from Cat 48 messages
+function extractTrackPosition(block) {
+  if (block.category !== 48) return null;
+  if (!block.I040 || block.I040.RHO === undefined) return null;
+  const sac = block.I010 ? block.I010.SAC.val : 0;
+  const sic = block.I010 ? block.I010.SIC.val : 0;
+  const sensorKey = sac + ":" + sic;
+  const sensor = mapSensorPositions[sensorKey];
+  if (!sensor) return null; // can't place without sensor position
+
+  const rho = block.I040.RHO.val;
+  const theta = block.I040.THETA.val;
+  const latlng = polarToLatLon(sensor.lat, sensor.lon, rho, theta);
+  const tn = block.I161 ? block.I161.Tn.val : null;
+  const hdg = block.I200 ? block.I200.CHdg.val : null;
+  const spd = block.I200 ? block.I200.CGS.val : null;
+  const alt = block.I110 && block.I110["3D_Height"] ? block.I110["3D_Height"].val : null;
+
+  return {
+    lat: latlng[0],
+    lon: latlng[1],
+    trackNum: tn,
+    heading: hdg,
+    speed: spd,
+    altitude: alt,
+    sensorKey: sensorKey,
+  };
+}
+
+function rebuildMap() {
+  if (!leafletMap || !mapContainer.classList.contains("visible")) return;
+
+  // Clear existing track layers
+  for (const tn in mapTrackLayers) {
+    mapTrackLayers[tn].polyline.remove();
+    mapTrackLayers[tn].marker.remove();
+  }
+  mapTrackLayers = {};
+
+  // Clear sensor markers
+  for (const key in mapSensorMarkers) {
+    mapSensorMarkers[key].remove();
+  }
+  mapSensorMarkers = {};
+  mapSensorPositions = {};
+
+  // First pass: collect sensor positions from all messages (not just filtered)
+  for (const msg of state.messages) {
+    if (!msg.parsed) continue;
+    for (const block of msg.parsed) {
+      const sp = extractSensorPosition(block);
+      if (sp) {
+        mapSensorPositions[sp.key] = sp;
+      }
+    }
+  }
+
+  // Add sensor markers
+  for (const key in mapSensorPositions) {
+    const sp = mapSensorPositions[key];
+    const marker = L.circleMarker([sp.lat, sp.lon], {
+      radius: 8,
+      color: "#ffffff",
+      fillColor: "#FF2F00",
+      fillOpacity: 0.9,
+      weight: 2,
+    }).addTo(leafletMap);
+    marker.bindTooltip("Sensor SAC:" + sp.sac + " SIC:" + sp.sic +
+      "<br>Lat: " + sp.lat.toFixed(5) +
+      "<br>Lon: " + sp.lon.toFixed(5) +
+      "<br>Alt: " + sp.height + "m",
+      { permanent: false });
+    mapSensorMarkers[key] = marker;
+  }
+
+  // Second pass: collect track positions from filtered messages
+  const trackPositions = {}; // trackNum → [{ lat, lon, seq, ... }]
+
+  for (const idx of state.filtered) {
+    const msg = state.messages[idx];
+    if (!msg.parsed) continue;
+    for (const block of msg.parsed) {
+      const tp = extractTrackPosition(block);
+      if (tp && tp.trackNum !== null) {
+        if (!trackPositions[tp.trackNum]) {
+          trackPositions[tp.trackNum] = [];
+        }
+        trackPositions[tp.trackNum].push({
+          lat: tp.lat,
+          lon: tp.lon,
+          seq: msg.seq,
+          heading: tp.heading,
+          speed: tp.speed,
+          altitude: tp.altitude,
+        });
+      }
+    }
+  }
+
+  // Draw tracks
+  const bounds = [];
+  for (const tn in trackPositions) {
+    const points = trackPositions[tn];
+    if (points.length === 0) continue;
+
+    const color = trackColor(parseInt(tn));
+    const latlngs = points.map(p => [p.lat, p.lon]);
+
+    // Polyline for track trail
+    const polyline = L.polyline(latlngs, {
+      color: color,
+      weight: 2,
+      opacity: 0.6,
+    }).addTo(leafletMap);
+
+    // Latest position marker
+    const last = points[points.length - 1];
+    const marker = L.circleMarker([last.lat, last.lon], {
+      radius: 5,
+      color: color,
+      fillColor: color,
+      fillOpacity: 1,
+      weight: 1,
+    }).addTo(leafletMap);
+
+    let tip = "Track #" + tn;
+    if (last.altitude !== null) tip += "<br>Alt: " + last.altitude + " ft";
+    if (last.speed !== null) tip += "<br>Spd: " + last.speed.toFixed(0) + " kn";
+    if (last.heading !== null) tip += "<br>Hdg: " + last.heading.toFixed(0) + "\u00B0";
+    marker.bindTooltip(tip, { permanent: false });
+
+    // Click marker → select that message in the list
+    marker.on("click", () => selectMessage(last.seq));
+
+    mapTrackLayers[tn] = { polyline, marker };
+    bounds.push(...latlngs);
+  }
+
+  // Add sensor positions to bounds
+  for (const key in mapSensorPositions) {
+    bounds.push([mapSensorPositions[key].lat, mapSensorPositions[key].lon]);
+  }
+
+  // Fit map to data
+  if (bounds.length > 0) {
+    leafletMap.fitBounds(bounds, { padding: [30, 30], maxZoom: 14 });
+  }
+}
+
+function toggleMap() {
+  const show = !mapContainer.classList.contains("visible");
+  mapContainer.classList.toggle("visible", show);
+  mapResizeHandle.classList.toggle("visible", show);
+  mapToggleBtn.classList.toggle("active", show);
+
+  if (show) {
+    initMap();
+    // Leaflet needs a tick to measure the container
+    setTimeout(() => {
+      leafletMap.invalidateSize();
+      rebuildMap();
+    }, 100);
+  }
+}
+
+let mapUpdateTimer = null;
+function scheduleMapUpdate() {
+  if (mapUpdateTimer) return;
+  mapUpdateTimer = setTimeout(() => {
+    mapUpdateTimer = null;
+    rebuildMap();
+  }, 2000);
+}
+
+function setupMapResize() {
+  let startY, startHeight;
+
+  mapResizeHandle.addEventListener("mousedown", (e) => {
+    startY = e.clientY;
+    startHeight = mapContainer.offsetHeight;
+    document.addEventListener("mousemove", onMove);
+    document.addEventListener("mouseup", onUp);
+    e.preventDefault();
+  });
+
+  function onMove(e) {
+    const delta = e.clientY - startY;
+    const newH = Math.max(150, Math.min(window.innerHeight * 0.75, startHeight + delta));
+    mapContainer.style.height = newH + "px";
+    leafletMap.invalidateSize();
+  }
+
+  function onUp() {
+    document.removeEventListener("mousemove", onMove);
+    document.removeEventListener("mouseup", onUp);
+  }
+}
+
+// -----------------------------------------------------------------------
+// Theme
+// -----------------------------------------------------------------------
+const themeToggle = $("#theme-toggle");
+const themeIcon = $("#theme-icon");
+
+function getEffectiveTheme() {
+  const explicit = document.documentElement.getAttribute("data-theme");
+  if (explicit) return explicit;
+  return window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
+}
+
+function updateThemeIcon() {
+  const t = getEffectiveTheme();
+  themeIcon.innerHTML = t === "dark" ? "&#9790;" : "&#9728;"; // moon / sun
+}
+
+function toggleTheme() {
+  const current = getEffectiveTheme();
+  const next = current === "dark" ? "light" : "dark";
+  document.documentElement.setAttribute("data-theme", next);
+  localStorage.setItem("asterix-monitor-theme", next);
+  updateThemeIcon();
+  updateMapTheme();
+}
+
+function initTheme() {
+  const saved = localStorage.getItem("asterix-monitor-theme");
+  if (saved) {
+    document.documentElement.setAttribute("data-theme", saved);
+  }
+  // else: no data-theme attr → follows system via CSS @media
+  updateThemeIcon();
+
+  // React to system theme changes when no explicit override
+  window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", () => {
+    if (!localStorage.getItem("asterix-monitor-theme")) {
+      updateThemeIcon();
+      updateMapTheme();
+    }
+  });
+}
+
+// -----------------------------------------------------------------------
+// Init
+// -----------------------------------------------------------------------
+function init() {
+  initTheme();
+  readHash();
+  setupResize();
+  connectWS();
+
+  // Stats polling every 2s
+  pollStats();
+  state.statsInterval = setInterval(pollStats, 2000);
+
+  // Event listeners
+  playToggle.addEventListener("click", togglePause);
+  tailToggle.addEventListener("click", toggleTail);
+  themeToggle.addEventListener("click", toggleTheme);
+  mapToggleBtn.addEventListener("click", toggleMap);
+  setupMapResize();
+
+  // Sortable column headers
+  document.querySelectorAll("#message-list-header .col-header").forEach(el => {
+    el.addEventListener("click", () => setSort(el.dataset.sort));
+  });
+  filterCat.addEventListener("change", onFilterChange);
+  filterIP.addEventListener("change", onFilterChange);
+  filterFrom.addEventListener("change", onFilterChange);
+  filterTo.addEventListener("change", onFilterChange);
+  filterSearch.addEventListener("input", onFilterChange);
+  clearFilters.addEventListener("click", () => {
+    filterCat.value = "";
+    filterIP.value = "";
+    filterFrom.value = "";
+    filterTo.value = "";
+    filterSearch.value = "";
+    onFilterChange();
+  });
+
+  // Detect scroll position — disengage/re-engage tail automatically
+  // Ascending: tail edge is bottom. Descending: tail edge is top.
+  msgList.addEventListener("scroll", () => {
+    let atEdge;
+    if (state.sortAsc) {
+      atEdge = msgList.scrollHeight - msgList.scrollTop - msgList.clientHeight < 40;
+    } else {
+      atEdge = msgList.scrollTop < 40;
+    }
+    if (state.autoScroll !== atEdge) {
+      state.autoScroll = atEdge;
+      updateTailButton();
+    }
+  });
+
+  // Keyboard navigation
+  document.addEventListener("keydown", handleKeyDown);
+
+  // Hash change from browser navigation
+  window.addEventListener("hashchange", () => {
+    readHash();
+    onFilterChange();
+  });
+}
+
+init();
+})();
+</script>
+</body>
+</html>
