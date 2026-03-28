@@ -1601,6 +1601,37 @@ function rebuildMap() {
   }
   mapSensorMarkers = {};
 
+  // Determine which plugins pass the current filter
+  const catVal = filterCat.value;
+  const ipVal = filterIP.value;
+  const searchVal = filterSearch.value.toLowerCase();
+
+  function trackPassesFilter(entity) {
+    // Plugin/category filter
+    if (catVal) {
+      const plugin = entity.source_plugin || "";
+      // catVal can be a plugin ID ("adsb") or a numeric category ("48")
+      const numVal = parseInt(catVal);
+      if (isNaN(numVal)) {
+        // String filter: match plugin ID
+        if (plugin !== catVal) return false;
+      } else {
+        // Numeric filter (ASTERIX category): only ASTERIX plugin tracks pass
+        if (plugin !== "asterix") return false;
+      }
+    }
+    // IP filter: match source_plugin's expected IP (approximate — tracks don't carry src_ip)
+    // For now, skip IP filtering on map since tracks don't have src_ip
+    // Search filter: match label or properties
+    if (searchVal) {
+      const label = (entity.label || "").toLowerCase();
+      const id = (entity.entity_id || "").toLowerCase();
+      const props = JSON.stringify(entity.properties || {}).toLowerCase();
+      if (!label.includes(searchVal) && !id.includes(searchVal) && !props.includes(searchVal)) return false;
+    }
+    return true;
+  }
+
   const bounds = [];
   let colorIdx = 0;
 
@@ -1608,6 +1639,7 @@ function rebuildMap() {
     const track = state.tracks[key];
     const entity = track.entity;
     if (!entity || entity.lat == null || entity.lon == null) continue;
+    if (!trackPassesFilter(entity)) continue;
 
     const pluginColor = (state.plugins[entity.source_plugin] || {}).color || "#888";
 
