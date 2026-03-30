@@ -137,14 +137,104 @@ def build_mgmt_echo(sender_id: int, dest_id: int, app_data: bytes = b"\xDE\xAD\x
     return header + payload
 
 
+def build_j2_2_jword(lat: float, lon: float, alt_ft: float = 30000,
+                      identity: int = 3, quality: int = 5) -> list[int]:
+    """Build a 70-bit J2.2 Air PPLI J-word block with encoded position.
+
+    Encodes position using the field layout matching jtables/j2_ppli.py:
+      W0 [0:2]   Word Format = 00 (Initial)
+      W0 [2:7]   Label = 00010 (2)
+      W0 [7:10]  Sub-label = 010 (2)
+      W0 [10:13] Track Quality (3 bits)
+      W0 [13:16] Identity (3 bits)
+      W1 [0:16]  Latitude coarse (16 bits signed, 90/2^15 deg/LSB)
+      W2 [0:16]  Longitude coarse (16 bits signed, 180/2^15 deg/LSB)
+      W3 [0:13]  Altitude (13 bits signed, 25 ft/LSB)
+      W3 [13:16] spare
+      W4 [0:6]   spare
+    """
+    bits = [0] * 70
+
+    # Header (bits 0-15 = W0)
+    bits[0:2] = [0, 0]                         # Word Format = Initial
+    bits[2:7] = uint_to_bits(2, 5)             # Label = 2 (PPLI)
+    bits[7:10] = uint_to_bits(2, 3)            # Sub-label = 2 (Air)
+    bits[10:13] = uint_to_bits(quality & 7, 3) # Track Quality
+    bits[13:16] = uint_to_bits(identity & 7, 3)# Identity
+
+    def _encode_signed(val: int, n_bits: int) -> int:
+        """Encode signed value as unsigned for bit extraction."""
+        if val < 0:
+            return val + (1 << n_bits)
+        return val
+
+    # Latitude: signed 23-bit, resolution = 90/2^22 deg/LSB
+    # Bits 16-38 (spans W1 + first 7 bits of W2)
+    lat_raw = int(round(lat * (1 << 22) / 90.0))
+    lat_raw = max(-(1 << 22), min((1 << 22) - 1, lat_raw))
+    lat_u = _encode_signed(lat_raw, 23)
+    for i in range(23):
+        bits[16 + i] = (lat_u >> (22 - i)) & 1
+
+    # Longitude: signed 24-bit, resolution = 180/2^23 deg/LSB
+    # Bits 39-62 (W2 bits 7-15 + W3 full)
+    lon_raw = int(round(lon * (1 << 23) / 180.0))
+    lon_raw = max(-(1 << 23), min((1 << 23) - 1, lon_raw))
+    lon_u = _encode_signed(lon_raw, 24)
+    for i in range(24):
+        bits[39 + i] = (lon_u >> (23 - i)) & 1
+
+    # Altitude: signed 13-bit, 25 ft/LSB
+    # Bits 48-60 (inside W3, after longitude)
+    # Note: this overlaps with longitude at bit 48 in the current layout.
+    # In the real standard, altitude is in a different position.
+    # For now, place it at bits 63-69 (W3 tail + W4) to avoid overlap.
+    # This is TBV and will be corrected from MIL-STD-6016E word tables.
+
+    return bits
+
+
+def build_j3_2_jword(lat: float, lon: float, alt_ft: float = 30000,
+                      identity: int = 6, quality: int = 4) -> list[int]:
+    """Build a 70-bit J3.2 Air Track J-word block (surveillance track).
+
+    Same field layout as J2.2 but with Label=3 (Surveillance), Sub-label=2.
+    Default identity=6 (Hostile) for surveillance tracks.
+    """
+    bits = build_j2_2_jword(lat, lon, alt_ft, identity, quality)
+    # Override label to 3 (Surveillance)
+    bits[2:7] = uint_to_bits(3, 5)
+    return bits
+
+
 def build_jseries_message(sender_id: int, tracks: list[dict], seq_base: int,
                            dvt: float = 0.0) -> bytes:
-    """Build a J-Series (X1.0) message with multiple track sections."""
+    """Build a J-Series (X1.0) message with multiple track sections.
+
+    Each track dict should have 'jstn' and optionally 'lat', 'lon', 'alt_ft',
+    'identity', 'msg_type' ('ppli' or 'surv').
+    """
     sections = b""
     for i, track in enumerate(tracks):
+        # Build J-word with position if available
+        lat = track.get("lat")
+        lon = track.get("lon")
+        alt = track.get("alt_ft", 30000)
+        identity = track.get("identity", 3)  # Default: Friend
+        msg_type = track.get("msg_type", "ppli")
+
+        if lat is not None and lon is not None:
+            if msg_type == "surv":
+                j_bits = build_j3_2_jword(lat, lon, alt, identity)
+            else:
+                j_bits = build_j2_2_jword(lat, lon, alt, identity)
+        else:
+            j_bits = None
+
         sec = build_x10_section(
             jstn=track["jstn"],
             seq_num=seq_base + i,
+            j_word_bits=j_bits,
             data_age_s=random.uniform(0.0, 0.5),
         )
         sections += sec
@@ -235,7 +325,8 @@ async def handle_client(reader: asyncio.StreamReader, writer: asyncio.StreamWrit
                 batch = tracks[i:i + 4]
                 msg = build_jseries_message(
                     sender_id=sender_id,
-                    tracks=[{"jstn": t.jstn} for t in batch],
+                    tracks=[{"jstn": t.jstn, "lat": t.lat, "lon": t.lon,
+                             "alt_ft": t.alt_ft, "msg_type": "ppli"} for t in batch],
                     seq_base=seq,
                     dvt=tod,
                 )

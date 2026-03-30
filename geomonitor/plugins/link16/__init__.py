@@ -20,6 +20,7 @@ from geomonitor.plugins.link16.jreap import (
     extract_messages_from_stream,
     parse_ah0,
 )
+from geomonitor.plugins.link16.jwords import decode_jword, load_all_tables
 
 log = logging.getLogger("geomonitor.plugin.link16")
 
@@ -177,25 +178,57 @@ class Link16Plugin(PluginBase):
         # X1.0 J-Series sections
         if msg.x10_sections:
             for i, sec in enumerate(msg.x10_sections):
-                key = f"J-Series Section {i+1}"
-                decoded[key] = {
+                # Decode J-word payload
+                jw = decode_jword(sec.j_word_bits_70)
+                jw_name = jw.header.j_name
+                if jw.message_def:
+                    jw_name += f" {jw.message_def.name}"
+
+                key = f"Section {i+1}: {jw_name}"
+                section_tree: dict[str, Any] = {
                     "Track Number": {"val": sec.jstn_octal, "desc": f"({sec.jstn})"},
                     "Sequence": {"val": sec.seq_num},
-                    "Relay": {"val": sec.relay},
-                    "Ack Request": {"val": sec.ack_req},
                     "Data Age": {"val": f"{sec.data_age:.3f}s"},
-                    "J-Words": {"val": sec.n_jwords},
-                    "Word 1": {"val": _bits_hex(sec.j_words[0])},
-                    "Word 2": {"val": _bits_hex(sec.j_words[1])},
-                    "Word 3": {"val": _bits_hex(sec.j_words[2])},
-                    "Word 4": {"val": _bits_hex(sec.j_words[3])},
-                    "Word 5": {"val": _bits_hex(sec.word5, pad=2)},
+                    "Message": {"val": jw.header.j_name,
+                                "meaning": jw.message_def.name if jw.message_def else "Unknown"},
                 }
+
+                # Add decoded J-word fields
+                for fname, fval in jw.fields.items():
+                    if isinstance(fval, dict):
+                        display = fval.get("name") or fval.get("display") or fval.get("degrees") or fval.get("feet") or fval.get("raw", "")
+                        section_tree[fname] = {"val": display}
+                        # Add raw value as desc if different
+                        if "raw" in fval and str(fval["raw"]) != str(display):
+                            section_tree[fname]["desc"] = f"raw={fval['raw']}"
+                    else:
+                        section_tree[fname] = {"val": fval}
+
+                # Raw J-words
+                section_tree["Raw Words"] = {
+                    "W1": {"val": _bits_hex(sec.j_words[0])},
+                    "W2": {"val": _bits_hex(sec.j_words[1])},
+                    "W3": {"val": _bits_hex(sec.j_words[2])},
+                    "W4": {"val": _bits_hex(sec.j_words[3])},
+                    "W5": {"val": _bits_hex(sec.word5, pad=2)},
+                }
+
+                decoded[key] = section_tree
+
             parts.append(f"Sender:{ah0.sender_id_octal}")
             tracks = [s.jstn_octal for s in msg.x10_sections]
+            # Include J-word message type in summary
+            jw_types = set()
+            for sec in msg.x10_sections:
+                jw = decode_jword(sec.j_word_bits_70)
+                jw_types.add(jw.header.j_name)
+            if jw_types:
+                parts.append("/".join(sorted(jw_types)))
             parts.append(f"Trk:{','.join(tracks)}")
             parts.append(f"{len(msg.x10_sections)} sec")
             meta["tracks"] = [s.jstn for s in msg.x10_sections]
+            meta["j_types"] = list(jw_types)
+            meta["_raw"] = raw  # Pass raw bytes for normalize()
 
         # X7.0 NPG Assignment sections
         if msg.x70_sections:
@@ -249,10 +282,77 @@ class Link16Plugin(PluginBase):
     # ----- Normalize -----
 
     def normalize(self, decoded: Any, meta: dict[str, Any]) -> list[NormalizedEntity]:
-        # JREAP framing doesn't carry geographic data directly.
-        # J-word payload decoding (J2.2 track lat/lon) requires MIL-STD-6020C
-        # which is a future enhancement. For now, no map entities.
-        return []
+        """Extract map entities from decoded J-word payloads."""
+        if not decoded or not isinstance(decoded, dict):
+            return []
+
+        entities = []
+        sender_id = meta.get("sender_id", 0)
+
+        # Look for decoded J-word sections in meta
+        # We need to re-decode the J-words from the JREAP message
+        # (the decoded tree is for display; normalize works from raw data)
+        raw = meta.get("_raw")
+        if not raw:
+            return []
+
+        from geomonitor.plugins.link16.jreap import decode_jreap_message as _decode
+        msg = _decode(raw)
+        if not msg or not msg.x10_sections:
+            return []
+
+        for sec in msg.x10_sections:
+            jw = decode_jword(sec.j_word_bits_70)
+            if not jw.message_def:
+                continue
+
+            fields = jw.fields
+            lat = fields.get("Latitude Coarse")
+            lon = fields.get("Longitude Coarse")
+            if lat is None or lon is None:
+                continue
+            # lat/lon are floats from the decoder
+            if not isinstance(lat, (int, float)):
+                continue
+
+            alt_data = fields.get("Altitude")
+            alt_m = None
+            if isinstance(alt_data, dict) and "meters" in alt_data:
+                alt_m = alt_data["meters"]
+
+            identity = fields.get("Identity")
+            id_name = identity.get("name", "") if isinstance(identity, dict) else ""
+
+            entity_type = EntityType.TRACK
+            label = f"{jw.header.j_name} {sec.jstn_octal}"
+            if id_name:
+                label += f" [{id_name}]"
+
+            props: dict[str, Any] = {
+                "j_type": jw.header.j_name,
+                "category": jw.message_def.category,
+                "jstn": sec.jstn_octal,
+                "sender": format(sender_id, "06o"),
+            }
+            if id_name:
+                props["identity"] = id_name
+
+            entities.append(NormalizedEntity(
+                entity_type=entity_type,
+                entity_id=f"l16:{sec.jstn_octal}",
+                lat=lat, lon=lon,
+                alt_m=alt_m,
+                heading_deg=None,
+                speed_mps=None,
+                timestamp=None,
+                label=label,
+                symbol_code=None,
+                confidence=None,
+                source_plugin=self.plugin_id,
+                properties=props,
+            ))
+
+        return entities
 
     # ----- Self-test -----
 
