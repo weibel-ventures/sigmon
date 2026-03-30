@@ -165,7 +165,7 @@ async def stats():
 
 @app.get("/api/plugins")
 async def get_plugins():
-    return registry.get_plugin_metadata()
+    return registry.get_plugin_metadata(settings_mgr.get_plugin)
 
 
 @app.get("/api/settings")
@@ -258,7 +258,7 @@ async def websocket_endpoint(ws: WebSocket):
         # Send plugin metadata and track state (messages are client-side only)
         await ws_manager.send_snapshot(
             ws,
-            plugins=registry.get_plugin_metadata(),
+            plugins=registry.get_plugin_metadata(settings_mgr.get_plugin),
             tracks=track_store.snapshot(),
         )
 

@@ -206,34 +206,43 @@ def _parse_aivdm(line: str) -> dict[str, Any] | None:
 
 
 class AisPlugin(PluginBase):
-    """AIS maritime vessel tracking plugin."""
+    """AIS maritime vessel tracking plugin — NMEA 0183 via TCP or UDP."""
 
     plugin_id = "ais"
     name = "AIS"
 
     def __init__(self):
         self._task: asyncio.Task | None = None
-        self._writer: asyncio.StreamWriter | None = None
+        self._server: asyncio.Server | None = None
+        self._transport: asyncio.DatagramTransport | None = None
         self._running = False
-        self._host = ""
-        self._port = 0
-        self._reconnect_delay = 5.0
         # Track vessel names (type 5 messages enrich later position reports)
         self._vessel_info: dict[str, dict] = {}
 
     async def start(self, settings: dict[str, Any], emit: EmitCallback) -> None:
-        self._host = settings.get("host", "153.44.253.27")
-        self._port = settings.get("port", 5631)
-        self._reconnect_delay = settings.get("reconnect_delay", 5.0)
+        mode = settings.get("mode", "tcp_listen")
         self._running = True
-        self._task = asyncio.create_task(self._connect_loop(emit))
-        log.info("AIS plugin started (target=%s:%d)", self._host, self._port)
+
+        if mode == "tcp_listen":
+            port = settings.get("tcp_port", 5631)
+            self._task = asyncio.create_task(self._tcp_listen(port, emit))
+        elif mode == "tcp_connect":
+            host = settings.get("host", "127.0.0.1")
+            port = settings.get("tcp_port", 5631)
+            delay = settings.get("reconnect_delay", 5.0)
+            self._task = asyncio.create_task(self._tcp_connect(host, port, delay, emit))
+        elif mode == "udp":
+            port = settings.get("udp_port", 5631)
+            self._task = asyncio.create_task(self._udp_listen(port, emit))
 
     async def stop(self) -> None:
         self._running = False
-        if self._writer:
-            self._writer.close()
-            self._writer = None
+        if self._server:
+            self._server.close()
+            self._server = None
+        if self._transport:
+            self._transport.close()
+            self._transport = None
         if self._task:
             self._task.cancel()
             try:
@@ -243,25 +252,91 @@ class AisPlugin(PluginBase):
             self._task = None
         log.info("AIS plugin stopped")
 
-    async def _connect_loop(self, emit: EmitCallback) -> None:
+    async def _tcp_listen(self, port: int, emit: EmitCallback) -> None:
+        self._server = await asyncio.start_server(
+            lambda r, w: self._handle_tcp_client(r, w, emit), "0.0.0.0", port)
+        log.info("AIS listening on tcp://0.0.0.0:%d", port)
+        while self._running:
+            await asyncio.sleep(1.0)
+
+    async def _handle_tcp_client(self, reader, writer, emit):
+        addr = writer.get_extra_info("peername")
+        log.info("AIS client connected: %s", addr)
+        try:
+            while self._running:
+                line = await reader.readline()
+                if not line:
+                    break
+                await emit(line, addr)
+        except (ConnectionResetError, asyncio.CancelledError):
+            pass
+        finally:
+            writer.close()
+            log.info("AIS client disconnected: %s", addr)
+
+    async def _tcp_connect(self, host: str, port: int, delay: float, emit: EmitCallback) -> None:
         while self._running:
             try:
-                log.info("AIS connecting to %s:%d...", self._host, self._port)
-                reader, self._writer = await asyncio.open_connection(self._host, self._port)
-                log.info("AIS connected to %s:%d", self._host, self._port)
+                log.info("AIS connecting to %s:%d...", host, port)
+                reader, writer = await asyncio.open_connection(host, port)
+                log.info("AIS connected to %s:%d", host, port)
                 while self._running:
-                    line_bytes = await reader.readline()
-                    if not line_bytes:
+                    line = await reader.readline()
+                    if not line:
                         break
-                    await emit(line_bytes, (self._host, self._port))
+                    await emit(line, (host, port))
+                writer.close()
             except asyncio.CancelledError:
                 break
             except (ConnectionRefusedError, ConnectionResetError, OSError) as exc:
-                log.warning("AIS connection failed: %s", exc)
-            except Exception as exc:
-                log.warning("AIS error: %s", exc)
+                log.warning("AIS connection to %s:%d failed: %s", host, port, exc)
             if self._running:
-                await asyncio.sleep(self._reconnect_delay)
+                await asyncio.sleep(delay)
+
+    async def _udp_listen(self, port: int, emit: EmitCallback) -> None:
+        loop = asyncio.get_running_loop()
+
+        class Protocol(asyncio.DatagramProtocol):
+            def __init__(self, emit_fn):
+                self._emit = emit_fn
+            def datagram_received(self, data, addr):
+                asyncio.ensure_future(self._emit(data, addr))
+
+        self._transport, _ = await loop.create_datagram_endpoint(
+            lambda: Protocol(emit), local_addr=("0.0.0.0", port))
+        log.info("AIS listening on udp://0.0.0.0:%d", port)
+        while self._running:
+            await asyncio.sleep(1.0)
+
+    def self_test(self) -> list[tuple[str, bool, str]]:
+        results = []
+        # Type 1 position report
+        try:
+            line = "!AIVDM,1,1,,A,13HOI:0P0000VOHLCnHQKwvL05Ip,0*23"
+            parsed = _parse_aivdm(line)
+            ok = parsed is not None and parsed.get("msg_type") == 1 and parsed.get("mmsi") is not None
+            results.append(("AIS Type 1", ok, f"mmsi={parsed.get('mmsi') if parsed else 'None'}"))
+        except Exception as e:
+            results.append(("AIS Type 1", False, str(e)))
+        # Full decode pipeline
+        try:
+            raw = line.encode()
+            result = self.decode(raw, ("127.0.0.1", 5631))
+            ok = result.error is None
+            results.append(("AIS decode", ok, result.summary[:60]))
+        except Exception as e:
+            results.append(("AIS decode", False, str(e)))
+        return results
+
+    def get_endpoints(self, settings: dict[str, Any]) -> list[str]:
+        mode = settings.get("mode", "tcp_listen")
+        if mode == "tcp_listen":
+            return [f"tcp://0.0.0.0:{settings.get('tcp_port', 5631)}"]
+        elif mode == "tcp_connect":
+            return [f"tcp→{settings.get('host', '127.0.0.1')}:{settings.get('tcp_port', 5631)}"]
+        elif mode == "udp":
+            return [f"udp://0.0.0.0:{settings.get('udp_port', 5631)}"]
+        return []
 
     def decode(self, raw: bytes, src: tuple[str, int]) -> DecodeResult:
         line = raw.decode("ascii", errors="replace").strip()

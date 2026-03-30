@@ -192,8 +192,26 @@ class PluginRegistry:
     # ----- Lifecycle -----
 
     async def start_all(self, settings_getter) -> None:
-        """Start all enabled plugins."""
+        """Run self-tests then start all enabled plugins."""
         for pid, loaded in self._plugins.items():
+            # Run self-test regardless of enabled state
+            try:
+                results = loaded.instance.self_test()
+                if results:
+                    passed = sum(1 for _, ok, _ in results if ok)
+                    total = len(results)
+                    failed = [(n, d) for n, ok, d in results if not ok]
+                    if failed:
+                        names = ", ".join(n for n, _ in failed)
+                        loaded.error = f"Self-test failed: {names}"
+                        log.error("Plugin %s self-test: %d/%d FAILED (%s)",
+                                  pid, passed, total, names)
+                    else:
+                        log.info("Plugin %s self-test: %d/%d passed", pid, passed, total)
+            except Exception as exc:
+                loaded.error = f"Self-test error: {exc}"
+                log.error("Plugin %s self-test error: %s", pid, exc)
+
             if not loaded.enabled:
                 continue
             try:
@@ -282,7 +300,7 @@ class PluginRegistry:
 
     # ----- Info -----
 
-    def get_plugin_metadata(self) -> dict[str, Any]:
+    def get_plugin_metadata(self, settings_getter=None) -> dict[str, Any]:
         """Plugin metadata for WebSocket snapshot."""
         result = {}
         for pid, loaded in self._plugins.items():
@@ -290,5 +308,12 @@ class PluginRegistry:
             meta["enabled"] = loaded.enabled
             meta["running"] = loaded.running
             meta["error"] = loaded.error
+            if settings_getter:
+                try:
+                    meta["endpoints"] = loaded.instance.get_endpoints(settings_getter(pid))
+                except Exception:
+                    meta["endpoints"] = []
+            else:
+                meta["endpoints"] = []
             result[pid] = meta
         return result

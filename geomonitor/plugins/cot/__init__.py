@@ -314,6 +314,44 @@ class CotPlugin(PluginBase):
             writer.close()
             log.info("CoT TCP client disconnected: %s", addr)
 
+    # ----- Self-test -----
+
+    def self_test(self) -> list[tuple[str, bool, str]]:
+        results = []
+        try:
+            xml = (b'<event version="2.0" uid="TEST-1" type="a-f-G-U-C" '
+                   b'time="2026-01-01T00:00:00Z" start="2026-01-01T00:00:00Z" '
+                   b'stale="2026-01-01T00:05:00Z" how="m-g">'
+                   b'<point lat="55.676" lon="12.568" hae="10" ce="5" le="5"/>'
+                   b'<detail><contact callsign="TESTCALL"/></detail></event>')
+            result = self.decode(xml, ("127.0.0.1", 6969))
+            ok = result.error is None and "TESTCALL" in result.summary
+            results.append(("CoT decode", ok, result.summary[:60]))
+        except Exception as e:
+            results.append(("CoT decode", False, str(e)))
+        try:
+            result = self.decode(xml, ("127.0.0.1", 6969))
+            entities = self.normalize(result.decoded, result.meta)
+            ok = len(entities) == 1 and abs(entities[0].lat - 55.676) < 0.001
+            results.append(("CoT normalize", ok, f"entities={len(entities)}"))
+        except Exception as e:
+            results.append(("CoT normalize", False, str(e)))
+        return results
+
+    def get_endpoints(self, settings: dict[str, Any]) -> list[str]:
+        mode = settings.get("mode", "udp")
+        eps = []
+        if mode == "udp":
+            port = settings.get("udp_port", 6969)
+            mc = settings.get("multicast_group", "")
+            ep = f"udp://0.0.0.0:{port}"
+            if mc:
+                ep += f" (multicast {mc})"
+            eps.append(ep)
+        else:
+            eps.append(f"tcp://0.0.0.0:{settings.get('tcp_port', 8087)}")
+        return eps
+
     # ----- Decode -----
 
     def decode(self, raw: bytes, src: tuple[str, int]) -> DecodeResult:

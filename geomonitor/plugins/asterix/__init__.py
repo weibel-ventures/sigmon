@@ -59,6 +59,33 @@ class AsterixPlugin(PluginBase):
             self._transport = None
             log.info("ASTERIX UDP listener stopped")
 
+    def self_test(self) -> list[tuple[str, bool, str]]:
+        results = []
+        try:
+            import asterix as asterix_lib
+            results.append(("import asterix", True, "asterix-decoder available"))
+        except ImportError as e:
+            results.append(("import asterix", False, str(e)))
+            return results
+        # Minimal Cat 48 decode test
+        try:
+            # Minimal valid ASTERIX Cat 48 (header only)
+            test = bytes([0x30, 0x00, 0x05, 0x00, 0x00])
+            parsed = asterix_lib.parse(test)
+            ok = isinstance(parsed, list)
+            results.append(("Cat 48 parse", ok, f"result_type={type(parsed).__name__}"))
+        except Exception as e:
+            results.append(("Cat 48 parse", False, str(e)))
+        return results
+
+    def get_endpoints(self, settings: dict[str, Any]) -> list[str]:
+        port = settings.get("udp_port", 23401)
+        mc = settings.get("multicast_group")
+        ep = f"udp://0.0.0.0:{port}"
+        if mc:
+            ep += f" (multicast {mc})"
+        return [ep]
+
     def decode(self, raw: bytes, src: tuple[str, int]) -> DecodeResult:
         try:
             parsed = asterix_lib.parse(raw)

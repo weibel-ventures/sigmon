@@ -43,32 +43,48 @@
     "settings_schema": {
         "type": "object",
         "properties": {
-            "host": {
+            "mode": {
                 "type": "string",
-                "title": "Host",
-                "default": "127.0.0.1",
-                "description": "Hostname or IP of the ADS-B data source (dump1090, readsb, etc.)"
+                "title": "Mode",
+                "default": "tcp_listen",
+                "enum": ["tcp_listen", "tcp_connect", "udp"],
+                "description": "tcp_listen: accept connections on port (default). tcp_connect: connect to remote host. udp: listen for datagrams."
             },
-            "port": {
+            "tcp_port": {
                 "type": "integer",
-                "title": "Port",
+                "title": "TCP Port",
+                "default": 30003,
+                "minimum": 1,
+                "maximum": 65535,
+                "description": "SBS port 30003 (standard), AVR port 30002"
+            },
+            "udp_port": {
+                "type": "integer",
+                "title": "UDP Port",
                 "default": 30003,
                 "minimum": 1,
                 "maximum": 65535
+            },
+            "host": {
+                "type": "string",
+                "title": "Remote Host",
+                "default": "127.0.0.1",
+                "description": "Only used in tcp_connect mode"
             },
             "format": {
                 "type": "string",
                 "title": "Format",
                 "default": "sbs",
                 "enum": ["sbs", "avr"],
-                "description": "Data format: sbs (BaseStation CSV on port 30003) or avr (raw hex on port 30002)"
+                "description": "sbs (BaseStation CSV) or avr (raw hex)"
             },
             "reconnect_delay": {
                 "type": "number",
                 "title": "Reconnect delay (s)",
                 "default": 5.0,
                 "minimum": 1,
-                "maximum": 60
+                "maximum": 60,
+                "description": "Only used in tcp_connect mode"
             }
         }
     },

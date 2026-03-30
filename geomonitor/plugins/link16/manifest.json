@@ -1,0 +1,59 @@
+{
+  "id": "link16",
+  "name": "Link 16",
+  "version": "1.0.0",
+  "api_version": 1,
+  "description": "JREAP-C / Link 16 tactical data link (MIL-STD-3011D) — J-Series messages, management, free text",
+  "author": "Signal Monitor",
+  "color": "#E74C3C",
+  "list_columns": [
+    {"key": "type", "label": "Type", "width": 100, "sortable": true},
+    {"key": "sender", "label": "Sender", "width": 70, "sortable": true},
+    {"key": "summary", "label": "Summary", "width": null, "sortable": true}
+  ],
+  "settings_schema": {
+    "type": "object",
+    "properties": {
+      "mode": {
+        "type": "string",
+        "title": "Mode",
+        "default": "tcp_listen",
+        "enum": ["tcp_listen", "tcp_connect", "udp"],
+        "description": "tcp_listen: accept JREAP-C connections (default). tcp_connect: connect to remote source. udp: listen for JREAP-B datagrams."
+      },
+      "tcp_port": {
+        "type": "integer",
+        "title": "TCP Port",
+        "default": 5555,
+        "minimum": 1,
+        "maximum": 65535,
+        "description": "JREAP-C TCP port"
+      },
+      "udp_port": {
+        "type": "integer",
+        "title": "UDP Port",
+        "default": 5555,
+        "minimum": 1,
+        "maximum": 65535,
+        "description": "JREAP-B UDP port"
+      },
+      "host": {
+        "type": "string",
+        "title": "Remote Host",
+        "default": "127.0.0.1",
+        "description": "Only used in tcp_connect mode"
+      },
+      "reconnect_delay": {
+        "type": "number",
+        "title": "Reconnect Delay (s)",
+        "default": 5.0,
+        "minimum": 1,
+        "maximum": 60,
+        "description": "Only used in tcp_connect mode"
+      }
+    }
+  },
+  "entity_types": [],
+  "map_layer": false,
+  "supports_hex_dump": true
+}

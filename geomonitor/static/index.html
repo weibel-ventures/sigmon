@@ -300,8 +300,6 @@ html, body {
   padding: 2px 12px;
   cursor: pointer;
   border-bottom: 1px solid transparent;
-  height: 22px;
-  overflow: hidden;
 }
 
 .msg-row:hover { background: var(--bg-hover); }
@@ -1133,117 +1131,96 @@ function formatTime(ts) {
 }
 
 // -----------------------------------------------------------------------
-// Virtual list — only renders visible rows + overscan
+// Simple DOM list — append new rows, trim old ones. No virtual list.
+// At ~50 msg/s with 5000 max DOM rows, this is fast enough.
 // -----------------------------------------------------------------------
-const ROW_HEIGHT = 22;   // fixed row height in px (enforced via CSS)
-const OVERSCAN = 10;     // extra rows above/below viewport
-let vlSpacer = null;     // top spacer div (created on first render)
-let vlViewport = null;   // the visible row container
+const MAX_DOM_ROWS = 2000; // keep DOM manageable
+let _listInitialized = false;
+let _suppressScrollEvent = false; // suppress during programmatic scroll
 
-function ensureVirtualListDOM() {
-  if (vlSpacer) return;
-  // msgList becomes the scroll container; we add a spacer + viewport inside
+function _initList() {
+  if (_listInitialized) return;
+  _listInitialized = true;
   msgList.innerHTML = "";
-  vlSpacer = document.createElement("div");
-  vlSpacer.style.cssText = "width:100%;flex-shrink:0;";
-  vlViewport = document.createElement("div");
-  vlViewport.style.cssText = "width:100%;";
-  msgList.appendChild(vlSpacer);
-  msgList.appendChild(vlViewport);
-  // Delegated click handler — single listener for all rows
-  vlViewport.addEventListener("click", (e) => {
+  // Delegated click handler
+  msgList.addEventListener("click", (e) => {
     const row = e.target.closest(".msg-row");
-    if (row) selectMessage(parseInt(row.dataset.seq));
+    if (row) {
+      state.autoScroll = false;
+      updateTailButton();
+      selectMessage(parseInt(row.dataset.seq));
+    }
   });
 }
 
-function renderMsgRowHTML(msg) {
+function createMsgRow(msg) {
+  const row = document.createElement("div");
   const hasError = msg.decode_error || msg.parse_error;
-  const cls = "msg-row" + (hasError ? " parse-error" : "") +
-    (msg.seq === state.selectedSeq ? " selected" : "");
+  row.className = "msg-row" + (hasError ? " parse-error" : "");
+  row.dataset.seq = msg.seq;
   const cats = messageCategories(msg);
   const plugin = messagePlugin(msg);
   const catStr = cats.length > 0 ? cats.join(",") : plugin;
   const summary = messageSummary(msg);
-  return '<div class="' + cls + '" data-seq="' + msg.seq + '">' +
+  row.innerHTML =
     '<div class="col-seq">' + msg.seq + '</div>' +
     '<div class="col-time">' + formatTime(msg.ts) + '</div>' +
     '<div class="col-ip">' + msg.src_ip + ':' + msg.src_port + '</div>' +
     '<div class="col-cat">' + catStr + '</div>' +
     '<div class="col-summary" title="' + escapeHtml(summary) + '">' + escapeHtml(summary) + '</div>' +
-    '<div class="col-size">' + msg.size + '</div></div>';
-}
-
-// Track which slice is currently rendered to avoid no-op repaints
-let vlRenderedStart = -1;
-let vlRenderedEnd = -1;
-
-// Render virtual list at an explicit scroll offset (or current scrollTop)
-function renderVirtualList(forceScrollTop) {
-  ensureVirtualListDOM();
-  const totalRows = state.filtered.length;
-
-  // If a target scrollTop is given, set the scroll geometry first so the
-  // browser doesn't clamp scrollTop to a stale scrollHeight.
-  if (forceScrollTop !== undefined) {
-    // Set full scroll height via spacer + padding BEFORE setting scrollTop
-    vlSpacer.style.height = (totalRows * ROW_HEIGHT) + "px";
-    vlViewport.style.paddingBottom = "0px";
-    vlViewport.innerHTML = "";
-    msgList.scrollTop = forceScrollTop;
-  }
-
-  const scrollTop = msgList.scrollTop;
-  const viewHeight = msgList.clientHeight;
-
-  let startIdx = Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN;
-  let endIdx = Math.ceil((scrollTop + viewHeight) / ROW_HEIGHT) + OVERSCAN;
-  startIdx = Math.max(0, startIdx);
-  endIdx = Math.min(totalRows, endIdx);
-
-  // Skip repaint if the visible slice hasn't changed
-  if (startIdx === vlRenderedStart && endIdx === vlRenderedEnd) return;
-  vlRenderedStart = startIdx;
-  vlRenderedEnd = endIdx;
-
-  // Set spacer to push viewport rows into correct scroll position
-  vlSpacer.style.height = (startIdx * ROW_HEIGHT) + "px";
-  const bottomPad = Math.max(0, (totalRows - endIdx) * ROW_HEIGHT);
-  vlViewport.style.paddingBottom = bottomPad + "px";
-
-  // Build visible rows as one innerHTML write
-  let html = "";
-  for (let i = startIdx; i < endIdx; i++) {
-    const msg = ring.get(state.filtered[i]);
-    if (msg) html += renderMsgRowHTML(msg);
-  }
-  vlViewport.innerHTML = html;
+    '<div class="col-size">' + msg.size + '</div>';
+  return row;
 }
 
 function renderFullList() {
-  vlRenderedStart = vlRenderedEnd = -1;
+  _initList();
+  msgList.innerHTML = "";
+  const frag = document.createDocumentFragment();
+  // Only render the last MAX_DOM_ROWS filtered messages
+  const start = Math.max(0, state.filtered.length - MAX_DOM_ROWS);
+  for (let i = start; i < state.filtered.length; i++) {
+    const msg = ring.get(state.filtered[i]);
+    if (msg) frag.appendChild(createMsgRow(msg));
+  }
+  msgList.appendChild(frag);
   if (state.autoScroll && !state.paused) {
-    tailSnap();
-  } else {
-    renderVirtualList();
+    _suppressScrollEvent = true;
+    msgList.scrollTop = msgList.scrollHeight;
+    _suppressScrollEvent = false;
   }
 }
 
-// Tail snap: jump to the end of the list
+function appendNewRows(startFilterIdx) {
+  _initList();
+  const frag = document.createDocumentFragment();
+  for (let i = startFilterIdx; i < state.filtered.length; i++) {
+    const msg = ring.get(state.filtered[i]);
+    if (msg) frag.appendChild(createMsgRow(msg));
+  }
+  if (frag.childNodes.length === 0) return;
+
+  // Trim old rows from the top if over limit
+  const excess = (msgList.children.length + frag.childNodes.length) - MAX_DOM_ROWS;
+  if (excess > 0) {
+    for (let i = 0; i < excess && msgList.firstChild; i++) {
+      msgList.removeChild(msgList.firstChild);
+    }
+  }
+
+  msgList.appendChild(frag);
+
+  if (state.autoScroll && !state.paused) {
+    _suppressScrollEvent = true;
+    msgList.scrollTop = msgList.scrollHeight;
+    _suppressScrollEvent = false;
+  }
+}
+
 function tailSnap() {
   if (!state.autoScroll) return;
-  if (state.filtered.length === 0) return;
-
-  // Select the tail message directly
-  const tailIdx = state.sortAsc ? state.filtered.length - 1 : 0;
-  const msg = ring.get(state.filtered[tailIdx]);
-  if (msg) state.selectedSeq = msg.seq;
-
-  // Compute target scroll position and render with it
-  const totalHeight = state.filtered.length * ROW_HEIGHT;
-  const targetScroll = state.sortAsc ? totalHeight : 0;
-  vlRenderedStart = vlRenderedEnd = -1;
-  renderVirtualList(targetScroll);
+  _suppressScrollEvent = true;
+  msgList.scrollTop = msgList.scrollHeight;
+  _suppressScrollEvent = false;
 }
 
 // -----------------------------------------------------------------------
@@ -1564,20 +1541,16 @@ function renderHexDump(msg) {
 function selectMessage(seq) {
   state.selectedSeq = seq;
 
-  // Update highlight in virtual list
-  if (vlViewport) {
-    vlViewport.querySelectorAll(".msg-row.selected").forEach(r => r.classList.remove("selected"));
-    const row = vlViewport.querySelector('.msg-row[data-seq="' + seq + '"]');
-    if (row) {
-      row.classList.add("selected");
-    } else {
-      // Row not currently rendered — scroll it into view
-      const filtIdx = _findFilteredIndexBySeq(seq);
-      if (filtIdx >= 0) {
-        msgList.scrollTop = filtIdx * ROW_HEIGHT;
-        vlRenderedStart = vlRenderedEnd = -1;
-        renderVirtualList();
-      }
+  // Update row highlight
+  msgList.querySelectorAll(".msg-row.selected").forEach(r => r.classList.remove("selected"));
+  const row = msgList.querySelector('.msg-row[data-seq="' + seq + '"]');
+  if (row) {
+    row.classList.add("selected");
+    // Scroll into view if needed
+    const listRect = msgList.getBoundingClientRect();
+    const rowRect = row.getBoundingClientRect();
+    if (rowRect.top < listRect.top || rowRect.bottom > listRect.bottom) {
+      row.scrollIntoView({ block: "nearest" });
     }
   }
 
@@ -1610,15 +1583,6 @@ function getAdjacentSeq(direction) {
   if (curIdx < 0) return null;
   const next = curIdx + direction;
   if (next >= 0 && next < state.filtered.length) {
-    // Scroll into view if needed
-    const scrollTop = msgList.scrollTop;
-    const viewHeight = msgList.clientHeight;
-    const rowTop = next * ROW_HEIGHT;
-    if (rowTop < scrollTop) {
-      msgList.scrollTop = rowTop;
-    } else if (rowTop + ROW_HEIGHT > scrollTop + viewHeight) {
-      msgList.scrollTop = rowTop + ROW_HEIGHT - viewHeight;
-    }
     return ring.get(state.filtered[next]).seq;
   }
   return null;
@@ -1635,12 +1599,18 @@ function handleKeyDown(e) {
   switch (e.key) {
     case "ArrowUp": {
       e.preventDefault();
+      state.autoScroll = false;
+
+      updateTailButton();
       const seq = getAdjacentSeq(-1);
       if (seq !== null) selectMessage(seq);
       break;
     }
     case "ArrowDown": {
       e.preventDefault();
+      state.autoScroll = false;
+
+      updateTailButton();
       const seq = getAdjacentSeq(1);
       if (seq !== null) selectMessage(seq);
       break;
@@ -1774,6 +1744,7 @@ function updatePlayButton() {
 // -----------------------------------------------------------------------
 function toggleTail() {
   state.autoScroll = !state.autoScroll;
+
   updateTailButton();
   if (state.autoScroll) {
     tailSnap();
@@ -1885,6 +1856,7 @@ function drainQueue() {
   const evicted = wasFull ? batch.length : Math.max(0, (prevSize + batch.length) - ring.capacity);
 
   // 2. Update filtered index
+  const _prevFilteredLen = state.filtered.length;
   if (state.renderDirty || state.sortCol !== "seq" || !state.sortAsc) {
     state.renderDirty = false;
     rebuildFiltered();
@@ -1910,12 +1882,13 @@ function drainQueue() {
     }
   }
 
-  // 4. Render virtual list (only visible rows)
-  if (state.autoScroll && !state.paused) {
-    tailSnap();
-  } else {
-    vlRenderedStart = vlRenderedEnd = -1; // force repaint
-    renderVirtualList();
+  // 4. Render — _prevFilteredLen was captured before step 2
+  if (evicted > 0 || state.sortCol !== "seq" || !state.sortAsc || !_listInitialized) {
+    // Full rebuild needed (eviction, non-default sort, first render)
+    renderFullList();
+  } else if (!state.paused && batch.length > 0) {
+    // Fast path: just append the newly filtered messages
+    appendNewRows(Math.max(0, _prevFilteredLen));
   }
 }
 
@@ -2275,6 +2248,21 @@ async function renderSettings() {
     html += '</div>';
     html += '<div class="settings-section-body">';
 
+    // Endpoints
+    const endpoints = meta.endpoints || [];
+    if (endpoints.length > 0) {
+      html += '<div class="settings-field" style="margin-bottom:4px"><label>Endpoints</label>';
+      html += '<div style="font-family:var(--mono);font-size:11px;color:var(--accent)">';
+      html += endpoints.map(ep => escapeHtml(ep)).join('<br>');
+      html += '</div></div>';
+    }
+
+    // Error
+    if (meta.error) {
+      html += '<div class="settings-field" style="margin-bottom:4px"><label>Error</label>';
+      html += '<div style="font-size:11px;color:var(--red)">' + escapeHtml(meta.error) + '</div></div>';
+    }
+
     // Enable toggle
     html += '<div class="settings-toggle-row">';
     html += '<label style="font-size:13px;color:var(--text)">Enabled</label>';
@@ -2487,19 +2475,14 @@ function init() {
 
   // Detect scroll position — disengage/re-engage tail automatically
   // Ascending: tail edge is bottom. Descending: tail edge is top.
+  // Scroll listener — only disengages tail when user scrolls up.
+  // Programmatic scrollTop changes set _suppressScrollEvent to prevent false triggers.
+  // Re-engaging is only via the Tail button.
   msgList.addEventListener("scroll", () => {
-    // Re-render virtual list on scroll
-    renderVirtualList();
-    // Detect tail edge
-    const totalHeight = state.filtered.length * ROW_HEIGHT;
-    let atEdge;
-    if (state.sortAsc) {
-      atEdge = totalHeight - msgList.scrollTop - msgList.clientHeight < 40;
-    } else {
-      atEdge = msgList.scrollTop < 40;
-    }
-    if (state.autoScroll !== atEdge) {
-      state.autoScroll = atEdge;
+    if (_suppressScrollEvent || !state.autoScroll) return;
+    const atBottom = msgList.scrollHeight - msgList.scrollTop - msgList.clientHeight < 40;
+    if (!atBottom) {
+      state.autoScroll = false;
       updateTailButton();
     }
   });

@@ -345,6 +345,39 @@ class GmtiPlugin(PluginBase):
             self._transport = None
             log.info("GMTI UDP listener stopped")
 
+    def self_test(self) -> list[tuple[str, bool, str]]:
+        results = []
+        # Packet header parse
+        try:
+            import struct as _st
+            hdr = b'31'                         # version 3.1
+            hdr += _st.pack('>I', 32)           # packet_size
+            hdr += b'DK'                        # nationality
+            hdr += bytes([5])                   # unclassified
+            hdr += b'  '                        # class_system
+            hdr += _st.pack('>H', 0)            # packet_code
+            hdr += bytes([0])                   # exercise_indicator
+            hdr += b'TestUnit  '                # platform_id (10 chars)
+            hdr += _st.pack('>I', 1001)         # mission_id
+            hdr += _st.pack('>I', 42)           # job_id
+            parsed = parse_packet_header(hdr)
+            ok = parsed is not None and parsed["version"] == "3.1" and parsed["nationality"] == "DK"
+            results.append(("STANAG 4607 header", ok, f"v={parsed['version']}"))
+        except Exception as e:
+            results.append(("STANAG 4607 header", False, str(e)))
+        # Type conversion
+        try:
+            lat = sa32_to_deg(-536870912)  # should be -45.0
+            ok = abs(lat - (-45.0)) < 0.001
+            results.append(("SA32 conversion", ok, f"sa32(-536870912)={lat:.4f}"))
+        except Exception as e:
+            results.append(("SA32 conversion", False, str(e)))
+        return results
+
+    def get_endpoints(self, settings: dict[str, Any]) -> list[str]:
+        port = settings.get("udp_port", 7607)
+        return [f"udp://0.0.0.0:{port}"]
+
     def decode(self, raw: bytes, src: tuple[str, int]) -> DecodeResult:
         pkt_hdr = parse_packet_header(raw)
         if not pkt_hdr:

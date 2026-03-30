@@ -106,37 +106,45 @@ def _parse_avr_line(line: str) -> dict[str, Any] | None:
 
 
 class AdsbPlugin(PluginBase):
-    """ADS-B / Mode S plugin — connects to dump1090/readsb TCP feeds."""
+    """ADS-B / Mode S plugin — SBS BaseStation / AVR feeds via TCP or UDP."""
 
     plugin_id = "adsb"
     name = "ADS-B"
 
     def __init__(self):
         self._task: asyncio.Task | None = None
-        self._reader: asyncio.StreamReader | None = None
-        self._writer: asyncio.StreamWriter | None = None
+        self._server: asyncio.Server | None = None
+        self._transport: asyncio.DatagramTransport | None = None
         self._running = False
-        self._host = ""
-        self._port = 0
         self._format = "sbs"
-        self._reconnect_delay = 5.0
         # Track state: remember callsigns per ICAO for enrichment
         self._callsigns: dict[str, str] = {}
 
     async def start(self, settings: dict[str, Any], emit: EmitCallback) -> None:
-        self._host = settings.get("host", "127.0.0.1")
-        self._port = settings.get("port", 30003)
+        mode = settings.get("mode", "tcp_listen")
         self._format = settings.get("format", "sbs")
-        self._reconnect_delay = settings.get("reconnect_delay", 5.0)
         self._running = True
-        self._task = asyncio.create_task(self._connect_loop(emit))
-        log.info("ADS-B plugin started (format=%s, target=%s:%d)", self._format, self._host, self._port)
+
+        if mode == "tcp_listen":
+            port = settings.get("tcp_port", 30003)
+            self._task = asyncio.create_task(self._tcp_listen(port, emit))
+        elif mode == "tcp_connect":
+            host = settings.get("host", "127.0.0.1")
+            port = settings.get("tcp_port", 30003)
+            delay = settings.get("reconnect_delay", 5.0)
+            self._task = asyncio.create_task(self._tcp_connect(host, port, delay, emit))
+        elif mode == "udp":
+            port = settings.get("udp_port", 30003)
+            self._task = asyncio.create_task(self._udp_listen(port, emit))
 
     async def stop(self) -> None:
         self._running = False
-        if self._writer:
-            self._writer.close()
-            self._writer = None
+        if self._server:
+            self._server.close()
+            self._server = None
+        if self._transport:
+            self._transport.close()
+            self._transport = None
         if self._task:
             self._task.cancel()
             try:
@@ -146,40 +154,95 @@ class AdsbPlugin(PluginBase):
             self._task = None
         log.info("ADS-B plugin stopped")
 
-    async def _connect_loop(self, emit: EmitCallback) -> None:
-        """Connect to the TCP feed with auto-reconnect."""
+    async def _tcp_listen(self, port: int, emit: EmitCallback) -> None:
+        """Listen for inbound TCP connections (default — data sources connect to us)."""
+        self._server = await asyncio.start_server(
+            lambda r, w: self._handle_tcp_client(r, w, emit), "0.0.0.0", port)
+        log.info("ADS-B listening on tcp://0.0.0.0:%d", port)
+        while self._running:
+            await asyncio.sleep(1.0)
+
+    async def _handle_tcp_client(self, reader, writer, emit):
+        addr = writer.get_extra_info("peername")
+        log.info("ADS-B client connected: %s", addr)
+        try:
+            while self._running:
+                line = await reader.readline()
+                if not line:
+                    break
+                await emit(line, addr)
+        except (ConnectionResetError, asyncio.CancelledError):
+            pass
+        finally:
+            writer.close()
+            log.info("ADS-B client disconnected: %s", addr)
+
+    async def _tcp_connect(self, host: str, port: int, delay: float, emit: EmitCallback) -> None:
+        """Connect outbound to a remote SBS/AVR feed (opt-in)."""
         while self._running:
             try:
-                log.info("ADS-B connecting to %s:%d...", self._host, self._port)
-                self._reader, self._writer = await asyncio.open_connection(
-                    self._host, self._port,
-                )
-                log.info("ADS-B connected to %s:%d", self._host, self._port)
-                await self._read_loop(emit)
+                log.info("ADS-B connecting to %s:%d...", host, port)
+                reader, writer = await asyncio.open_connection(host, port)
+                log.info("ADS-B connected to %s:%d", host, port)
+                while self._running:
+                    line = await reader.readline()
+                    if not line:
+                        break
+                    await emit(line, (host, port))
+                writer.close()
             except asyncio.CancelledError:
                 break
             except (ConnectionRefusedError, ConnectionResetError, OSError) as exc:
-                log.warning("ADS-B connection to %s:%d failed: %s", self._host, self._port, exc)
-            except Exception as exc:
-                log.warning("ADS-B error: %s", exc)
-
+                log.warning("ADS-B connection to %s:%d failed: %s", host, port, exc)
             if self._running:
-                log.info("ADS-B reconnecting in %.0fs...", self._reconnect_delay)
-                await asyncio.sleep(self._reconnect_delay)
+                await asyncio.sleep(delay)
 
-    async def _read_loop(self, emit: EmitCallback) -> None:
-        """Read lines from the TCP stream."""
-        while self._running and self._reader:
-            line_bytes = await self._reader.readline()
-            if not line_bytes:
-                log.info("ADS-B connection closed by remote")
-                break
-            try:
-                line = line_bytes.decode("ascii", errors="replace").strip()
-                if line:
-                    await emit(line_bytes, (self._host, self._port))
-            except Exception as exc:
-                log.debug("ADS-B read error: %s", exc)
+    async def _udp_listen(self, port: int, emit: EmitCallback) -> None:
+        """Listen for UDP datagrams."""
+        loop = asyncio.get_running_loop()
+
+        class Protocol(asyncio.DatagramProtocol):
+            def __init__(self, emit_fn):
+                self._emit = emit_fn
+            def datagram_received(self, data, addr):
+                asyncio.ensure_future(self._emit(data, addr))
+
+        self._transport, _ = await loop.create_datagram_endpoint(
+            lambda: Protocol(emit), local_addr=("0.0.0.0", port))
+        log.info("ADS-B listening on udp://0.0.0.0:%d", port)
+        while self._running:
+            await asyncio.sleep(1.0)
+
+    def self_test(self) -> list[tuple[str, bool, str]]:
+        results = []
+        # SBS parse test
+        try:
+            line = "MSG,3,1,1,4CA2E5,1,2026/03/28,10:00:00.000,2026/03/28,10:00:00.000,SAS1234 ,35000,250,45.0,55.620000,12.650000,-200,,0,0,0,0"
+            parsed = _parse_sbs_line(line)
+            ok = (parsed is not None and parsed["icao"] == "4CA2E5"
+                  and parsed["lat"] == 55.62 and parsed["callsign"] == "SAS1234")
+            results.append(("SBS parse", ok, f"icao={parsed['icao'] if parsed else 'None'}"))
+        except Exception as e:
+            results.append(("SBS parse", False, str(e)))
+        # Full decode test
+        try:
+            raw = line.encode()
+            result = self.decode(raw, ("127.0.0.1", 30003))
+            ok = result.error is None and result.summary != ""
+            results.append(("SBS decode", ok, result.summary[:60]))
+        except Exception as e:
+            results.append(("SBS decode", False, str(e)))
+        return results
+
+    def get_endpoints(self, settings: dict[str, Any]) -> list[str]:
+        mode = settings.get("mode", "tcp_listen")
+        if mode == "tcp_listen":
+            return [f"tcp://0.0.0.0:{settings.get('tcp_port', 30003)}"]
+        elif mode == "tcp_connect":
+            return [f"tcp→{settings.get('host', '127.0.0.1')}:{settings.get('tcp_port', 30003)}"]
+        elif mode == "udp":
+            return [f"udp://0.0.0.0:{settings.get('udp_port', 30003)}"]
+        return []
 
     def decode(self, raw: bytes, src: tuple[str, int]) -> DecodeResult:
         line = raw.decode("ascii", errors="replace").strip()

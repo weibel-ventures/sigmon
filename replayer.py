@@ -45,14 +45,14 @@ DEFAULTS = {
         "host": "127.0.0.1",
         "port": 30003,
         "rate": 20,
-        "proto": "tcp_server",  # ADS-B plugin connects TO us
+        "proto": "tcp_client",  # Connect to monitor's listening port
     },
     "ais": {
         "file": str(SCRIPT_DIR / "test_data" / "ais-nmea-sample.txt"),
         "host": "127.0.0.1",
         "port": 5631,
         "rate": 30,
-        "proto": "tcp_server",  # AIS plugin connects TO us
+        "proto": "tcp_client",  # Connect to monitor's listening port
     },
     "cot": {
         "file": str(SCRIPT_DIR / "test_data" / "cot-samples.xml"),
@@ -171,12 +171,12 @@ def _generate_sbs_data():
             trk = (trk + random.uniform(-2, 2)) % 360
             vr = random.randint(-200, 200)
 
-            line = f"MSG,3,1,1,{icao},1,{date_s},{time_s},{date_s},{time_s},{cs},{alt},{gs},{trk:.1f},{lat:.6f},{lon:.6f},{vr},,,,0\n"
+            line = f"MSG,3,1,1,{icao},1,{date_s},{time_s},{date_s},{time_s},{cs},{alt},{gs},{trk:.1f},{lat:.6f},{lon:.6f},{vr},,,0,0,0\n"
             yield line
 
             # Occasionally send MSG type 1 (callsign)
             if random.random() < 0.2:
-                line = f"MSG,1,1,1,{icao},1,{date_s},{time_s},{date_s},{time_s},{cs},,,,,,,,,,0\n"
+                line = f"MSG,1,1,1,{icao},1,{date_s},{time_s},{date_s},{time_s},{cs},,,,,,,,,0,0,0\n"
                 yield line
 
 
@@ -184,25 +184,25 @@ def replay_adsb(args):
     filepath = Path(args.file)
     use_file = filepath.exists()
 
-    print(f"ADS-B replayer (SBS TCP server): listening on {args.host}:{args.port}")
+    print(f"ADS-B replayer → tcp://{args.host}:{args.port}")
     if use_file:
-        print(f"  File: {filepath.name} ({sum(1 for _ in open(filepath))} lines)")
+        print(f"  File: {filepath.name}")
     else:
-        print(f"  No SBS file found — using synthetic data")
+        print(f"  Synthetic data (5 aircraft over Copenhagen)")
     print(f"  Rate: {args.rate} msg/s")
-    print(f"  The ADS-B plugin should connect to this address.")
 
     delay = 1.0 / args.rate if args.rate > 0 else 0.05
 
-    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.bind((args.host, args.port))
-    srv.listen(1)
-    print(f"  Waiting for connection...")
-
     while True:
-        conn, addr = srv.accept()
-        print(f"  Client connected: {addr}")
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.connect((args.host, args.port))
+            print(f"  Connected to {args.host}:{args.port}")
+        except ConnectionRefusedError:
+            print(f"  Connection refused — retrying in 3s...")
+            time.sleep(3)
+            continue
+
         count = 0
         try:
             if use_file:
@@ -212,7 +212,7 @@ def replay_adsb(args):
                             line = line.strip()
                             if not line or not line.startswith("MSG"):
                                 continue
-                            conn.sendall((line + "\n").encode())
+                            sock.sendall((line + "\n").encode())
                             count += 1
                             time.sleep(delay)
                             if count % 100 == 0:
@@ -224,22 +224,26 @@ def replay_adsb(args):
                 gen = _generate_sbs_data()
                 while True:
                     line = next(gen)
-                    conn.sendall(line.encode())
+                    sock.sendall(line.encode())
                     count += 1
                     time.sleep(delay)
                     if count % 100 == 0:
                         print(f"\r  Sent: {count} messages", end="", flush=True)
         except (BrokenPipeError, ConnectionResetError):
-            print(f"\n  Client disconnected after {count} messages")
-        except KeyboardInterrupt:
-            break
-        print(f"  Waiting for new connection...")
+            print(f"\n  Disconnected after {count} messages")
+        finally:
+            sock.close()
 
-    srv.close()
+        if not args.loop:
+            break
+        print(f"  Reconnecting in 2s...")
+        time.sleep(2)
+
+    print(f"Done: {count} messages")
 
 
 # ---------------------------------------------------------------------------
-# AIS — NMEA TCP server (plugin connects to us)
+# AIS — NMEA TCP client (connects to monitor's listening port)
 # ---------------------------------------------------------------------------
 def replay_ais(args):
     filepath = Path(args.file)
@@ -248,22 +252,22 @@ def replay_ais(args):
         sys.exit(1)
 
     line_count = sum(1 for _ in open(filepath))
-    print(f"AIS replayer (NMEA TCP server): listening on {args.host}:{args.port}")
+    print(f"AIS replayer → tcp://{args.host}:{args.port}")
     print(f"  File: {filepath.name} ({line_count} lines)")
     print(f"  Rate: {args.rate} msg/s")
-    print(f"  The AIS plugin should connect to this address.")
 
     delay = 1.0 / args.rate if args.rate > 0 else 0.03
 
-    srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    srv.bind((args.host, args.port))
-    srv.listen(1)
-    print(f"  Waiting for connection...")
-
     while True:
-        conn, addr = srv.accept()
-        print(f"  Client connected: {addr}")
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.connect((args.host, args.port))
+            print(f"  Connected to {args.host}:{args.port}")
+        except ConnectionRefusedError:
+            print(f"  Connection refused — retrying in 3s...")
+            time.sleep(3)
+            continue
+
         count = 0
         try:
             while True:
@@ -272,7 +276,7 @@ def replay_ais(args):
                         line = line.strip()
                         if not line:
                             continue
-                        conn.sendall((line + "\r\n").encode())
+                        sock.sendall((line + "\r\n").encode())
                         count += 1
                         time.sleep(delay)
                         if count % 200 == 0:
@@ -281,12 +285,16 @@ def replay_ais(args):
                     break
                 print(f"\n  Pass complete ({count}), looping...")
         except (BrokenPipeError, ConnectionResetError):
-            print(f"\n  Client disconnected after {count} messages")
-        except KeyboardInterrupt:
-            break
-        print(f"  Waiting for new connection...")
+            print(f"\n  Disconnected after {count} messages")
+        finally:
+            sock.close()
 
-    srv.close()
+        if not args.loop:
+            break
+        print(f"  Reconnecting in 2s...")
+        time.sleep(2)
+
+    print(f"Done: {count} messages")
 
 
 # ---------------------------------------------------------------------------

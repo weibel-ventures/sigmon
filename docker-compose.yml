@@ -3,10 +3,22 @@ services:
     build: .
     ports:
       - "${WEB_PORT:-8080}:${WEB_PORT:-8080}"
+      # ASTERIX (UDP)
       - "${ASTERIX_UDP_PORT:-23401}:${ASTERIX_UDP_PORT:-23401}/udp"
+      # ADS-B (TCP listen + UDP)
+      - "30003:30003/tcp"
+      - "30003:30003/udp"
+      # AIS (TCP listen + UDP)
+      - "5631:5631/tcp"
+      - "5631:5631/udp"
+      # CoT/TAK (UDP + TCP)
       - "${COT_UDP_PORT:-6969}:${COT_UDP_PORT:-6969}/udp"
       - "${COT_TCP_PORT:-8087}:${COT_TCP_PORT:-8087}/tcp"
+      # GMTI (UDP)
       - "${GMTI_UDP_PORT:-7607}:${GMTI_UDP_PORT:-7607}/udp"
+      # Link 16 JREAP (TCP listen + UDP)
+      - "5555:5555/tcp"
+      - "5555:5555/udp"
     volumes:
       - ./config:/etc/sigmon
     environment:

@@ -90,6 +90,34 @@ class PluginBase(ABC):
         """
         return []
 
+    # --- Self-test ---
+
+    def self_test(self) -> list[tuple[str, bool, str]]:
+        """Run built-in verification of the decode pipeline.
+
+        Called at startup before the plugin begins ingesting live data.
+        Each test returns (name, passed, detail). If any test fails,
+        the plugin is marked with an error but still starts.
+
+        Override to add protocol-specific test vectors.
+
+        Returns:
+            List of (test_name, passed, detail_message) tuples.
+        """
+        return []
+
+    # --- Endpoints ---
+
+    def get_endpoints(self, settings: dict[str, Any]) -> list[str]:
+        """Return human-readable descriptions of the network endpoints
+        this plugin listens on or connects to, given the current settings.
+
+        Examples: ["udp://0.0.0.0:23401", "tcp→192.168.0.84:30003"]
+
+        Override in each plugin.
+        """
+        return []
+
     # --- Settings ---
 
     def on_settings_changed(self, old: dict[str, Any], new: dict[str, Any]) -> bool:
